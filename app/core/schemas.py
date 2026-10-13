@@ -15,6 +15,8 @@ from pydantic import (
     field_validator,
 )
 
+MAX_BATCH_ROWS = 1000
+
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
 
 
@@ -27,14 +29,34 @@ class Record(BaseModel):
 
 
 class DepartmentRecord(Record):
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"id": 1, "department": "Supply Chain"}]}
+    )
+
     department: NonEmptyStr
 
 
 class JobRecord(Record):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"id": 1, "job": "Recruiter"}]})
+
     job: NonEmptyStr
 
 
 class HiredEmployeeRecord(Record):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "id": 4535,
+                    "name": "Marcelo Gonzalez",
+                    "datetime": "2021-07-27T16:02:08Z",
+                    "department_id": 1,
+                    "job_id": 2,
+                }
+            ]
+        }
+    )
+
     name: NonEmptyStr
     datetime: AwareDatetime
     department_id: PositiveInt

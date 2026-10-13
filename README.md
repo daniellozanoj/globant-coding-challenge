@@ -29,7 +29,7 @@ code and container image target a serverless architecture on **AWS**.
 |---|---|---|
 | 1. API | Receive historical data from CSV files | ✅ Done |
 | 1. API | Upload the files to the new SQL database | ✅ Done |
-| 1. API | Insert batch transactions (1 to 1000 rows) in one request | ⏳ In progress |
+| 1. API | Insert batch transactions (1 to 1000 rows) in one request | ✅ Done |
 | 2. SQL | Hires per job and department in 2021 by quarter | 🔜 Pending |
 | 2. SQL | Departments that hired above the 2021 mean | 🔜 Pending |
 | Bonus | Cloud hosting (AWS), automated tests, containers | 🔜 Pending |
@@ -319,6 +319,9 @@ Interactive OpenAPI documentation is served at http://localhost:8000/docs.
 | `POST` | `/api/v1/ingestions/{table}` | Upload a CSV file and load it into `departments`, `jobs` or `hired_employees` |
 | `GET` | `/api/v1/ingestions/{job_id}` | Status and counters of an ingestion job |
 | `GET` | `/api/v1/ingestions/{job_id}/rejections` | Rows rejected by a job, paginated |
+| `POST` | `/api/v1/departments/batch` | Insert or update 1 to 1000 departments in one transaction |
+| `POST` | `/api/v1/jobs/batch` | Insert or update 1 to 1000 jobs in one transaction |
+| `POST` | `/api/v1/hired_employees/batch` | Insert or update 1 to 1000 hired employees in one transaction |
 
 Loads run synchronously in the local API. On AWS the same loader runs asynchronously behind
 S3 and SQS ([ADR-003](docs/architecture.md#adr-003--direct-to-s3-uploads-with-presigned-urls-and-an-sqs-triggered-loader)).
@@ -387,15 +390,67 @@ curl "http://localhost:8000/api/v1/ingestions/<job_id>/rejections?limit=2&offset
 }
 ```
 
+### Batch insert (1 to 1000 rows)
+
+One typed endpoint per table, so each one documents its exact schema in `/docs`. Rows follow the
+same [data quality rules](#data-quality-rules) as the CSV files.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/hired_employees/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rows": [
+      {"id": 4535, "name": "Marcelo Gonzalez", "datetime": "2021-07-27T16:02:08Z", "department_id": 1, "job_id": 2},
+      {"id": 4572, "name": "Lidia Mendez", "datetime": "2021-07-27T19:04:09Z", "department_id": 1, "job_id": 2}
+    ]
+  }'
+```
+
+```json
+{"table": "hired_employees", "rows_upserted": 2}
+```
+
+The batch is **all or nothing**:
+
+1. The payload is validated: 1 to 1000 rows, types, ISO 8601 datetimes with timezone, no extra
+   fields.
+2. Ids must be unique within the batch.
+3. For `hired_employees`, every `department_id` and `job_id` must exist.
+4. If any row fails, the response is `422` with every error and **nothing is written**. Otherwise
+   all rows are upserted in a single transaction and the response is `201`.
+
+Errors use the same shape as FastAPI's own validation errors, with the index of the failing row:
+
+```json
+{
+  "detail": [
+    {
+      "loc": ["body", "rows", 1, "department_id"],
+      "msg": "department_id: 99 does not exist",
+      "type": "foreign_key_violation"
+    },
+    {
+      "loc": ["body", "rows", 4, "id"],
+      "msg": "duplicated id 7 in the batch",
+      "type": "duplicate_id"
+    }
+  ]
+}
+```
+
+Existing ids are **updated** (upsert) rather than rejected, so a client can safely retry a batch
+after a timeout, and batches behave like the CSV migration.
+
 ### Errors
 
 | Status | When |
 |---|---|
 | `400` | The file is not a UTF-8 CSV. The job is marked `FAILED`; the body includes its `job_id` |
 | `404` | Unknown job, or a historical file is missing |
+| `409` | The database rejected a batch (e.g. a referenced row disappeared after validation); nothing was written |
 | `413` | The upload exceeds `MAX_UPLOAD_MB` |
 | `415` | The uploaded file is not a `.csv` |
-| `422` | Unknown table name or invalid parameters |
+| `422` | Unknown table name, invalid parameters, or invalid batch rows (nothing written) |
 | `500` | Unexpected failure. The job is marked `FAILED`, and the load can be safely retried |
 
 ## Development workflow
