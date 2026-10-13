@@ -16,6 +16,7 @@ from app.db.session import get_session
 pytestmark = pytest.mark.integration
 
 HIRES_BY_QUARTER = "/api/v1/metrics/hires-by-quarter"
+ABOVE_MEAN = "/api/v1/metrics/departments-above-mean"
 
 DEPARTMENTS = {1: "Supply Chain", 2: "Staff", 3: "Maintenance"}
 JOBS = {1: "Recruiter", 2: "Manager", 3: "GIS Analyst", 4: "Geologist"}
@@ -116,9 +117,10 @@ def test_year_without_hires_returns_an_empty_list(client: TestClient, hires: Non
     assert client.get(HIRES_BY_QUARTER, params={"year": 2019}).json() == []
 
 
+@pytest.mark.parametrize("endpoint", [HIRES_BY_QUARTER, ABOVE_MEAN])
 @pytest.mark.parametrize("year", ["1999", "2101", "last"])
-def test_invalid_year_is_rejected(client: TestClient, year: str) -> None:
-    assert client.get(HIRES_BY_QUARTER, params={"year": year}).status_code == 422
+def test_invalid_year_is_rejected(client: TestClient, endpoint: str, year: str) -> None:
+    assert client.get(endpoint, params={"year": year}).status_code == 422
 
 
 @pytest.mark.parametrize(
@@ -162,3 +164,79 @@ def test_hires_by_quarter_on_the_sample_files(client: TestClient) -> None:
         "Q3": 0,
         "Q4": 0,
     }
+
+
+# --- Departments above the mean ---
+# 2021 hires in the hand-made dataset: Staff 6, Supply Chain 3, Maintenance 0 -> mean 3.
+
+
+def test_departments_above_mean_defaults_to_2021(client: TestClient, hires: None) -> None:
+    response = client.get(ABOVE_MEAN)
+
+    assert response.status_code == 200
+    # Supply Chain hired exactly the mean (3), which is not "more than the mean".
+    assert response.json() == [{"id": 2, "department": "Staff", "hired": 6}]
+
+
+def test_departments_without_hires_count_in_the_mean(client: TestClient, hires: None) -> None:
+    # 2022: Staff 1, Supply Chain 0, Maintenance 0 -> mean 1/3, so Staff is above it.
+    # Averaging only the departments that hired, the mean would be 1 and nobody would qualify.
+    response = client.get(ABOVE_MEAN, params={"year": 2022})
+
+    assert response.json() == [{"id": 2, "department": "Staff", "hired": 1}]
+
+
+def test_ties_are_ordered_alphabetically(client: TestClient, hires: None, session: Session) -> None:
+    # 2023: Supply Chain 2, Staff 2, Maintenance 0 -> mean 4/3, both above with the same count.
+    repository.upsert_records(
+        session,
+        TableName.HIRED_EMPLOYEES,
+        [
+            HiredEmployeeRecord.model_validate(
+                {
+                    "id": 100 + i,
+                    "name": f"Employee {100 + i}",
+                    "datetime": "2023-05-01T00:00:00Z",
+                    "department_id": department_id,
+                    "job_id": 1,
+                }
+            )
+            for i, department_id in enumerate([1, 1, 2, 2])
+        ],
+    )
+    session.commit()
+
+    response = client.get(ABOVE_MEAN, params={"year": 2023})
+
+    assert response.json() == [
+        {"id": 2, "department": "Staff", "hired": 2},
+        {"id": 1, "department": "Supply Chain", "hired": 2},
+    ]
+
+
+def test_year_without_hires_has_no_department_above_mean(client: TestClient, hires: None) -> None:
+    assert client.get(ABOVE_MEAN, params={"year": 2019}).json() == []
+
+
+def test_departments_above_mean_as_csv(client: TestClient, hires: None) -> None:
+    response = client.get(ABOVE_MEAN, params={"format": "csv"})
+
+    assert 'filename="departments_above_mean_2021.csv"' in response.headers["content-disposition"]
+    assert response.text.splitlines() == ["id,department,hired", "2,Staff,6"]
+
+
+def test_departments_above_mean_on_the_sample_files(client: TestClient) -> None:
+    client.post("/api/v1/ingestions/historical")
+
+    response = client.get(ABOVE_MEAN)
+
+    # 1,643 hires in 2021 across 12 departments: mean 136.92.
+    assert response.json() == [
+        {"id": 8, "department": "Support", "hired": 216},
+        {"id": 5, "department": "Engineering", "hired": 205},
+        {"id": 6, "department": "Human Resources", "hired": 201},
+        {"id": 7, "department": "Services", "hired": 200},
+        {"id": 4, "department": "Business Development", "hired": 185},
+        {"id": 3, "department": "Research and Development", "hired": 148},
+        {"id": 9, "department": "Marketing", "hired": 142},
+    ]

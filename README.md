@@ -34,7 +34,7 @@ code and container image target a serverless architecture on **AWS**.
 | 1. API | Upload the files to the new SQL database | ✅ Done |
 | 1. API | Insert batch transactions (1 to 1000 rows) in one request | ✅ Done |
 | 2. SQL | Hires per job and department in 2021 by quarter | ✅ Done |
-| 2. SQL | Departments that hired above the 2021 mean | 🔜 Pending |
+| 2. SQL | Departments that hired above the 2021 mean | ✅ Done |
 | Bonus | Automated tests | ✅ Done (unit + integration) |
 | Bonus | Containerize the application (Dockerfile) | ✅ Done |
 | Bonus | Cloud hosting (AWS) | 🔜 Pending |
@@ -396,6 +396,7 @@ Interactive OpenAPI documentation is served at http://localhost:8000/docs.
 | `POST` | `/api/v1/jobs/batch` | Insert or update 1 to 1000 jobs in one transaction |
 | `POST` | `/api/v1/hired_employees/batch` | Insert or update 1 to 1000 hired employees in one transaction |
 | `GET` | `/api/v1/metrics/hires-by-quarter` | Hires per department and job in a year, by quarter (JSON or CSV) |
+| `GET` | `/api/v1/metrics/departments-above-mean` | Departments that hired more than the mean of all departments in a year (JSON or CSV) |
 
 Loads run synchronously in the local API. On AWS the same loader runs asynchronously behind
 S3 and SQS ([ADR-003](docs/architecture.md#adr-003--direct-to-s3-uploads-with-presigned-urls-and-an-sqs-triggered-loader)).
@@ -536,6 +537,7 @@ is always a bound parameter.
 | Endpoint | Requirement |
 |---|---|
 | `GET /api/v1/metrics/hires-by-quarter?year=2021` | Hires per department and job in 2021, divided by quarter, ordered alphabetically by department and job |
+| `GET /api/v1/metrics/departments-above-mean?year=2021` | Id, name and hires of the departments that hired more than the 2021 mean of all departments, ordered by hires (descending) |
 
 Both JSON (default) and CSV are supported: send `Accept: text/csv` or add `?format=csv` to get a
 file stakeholders can open directly in a spreadsheet.
@@ -566,6 +568,29 @@ SQL: [`hires_by_quarter.sql`](app/db/queries/hires_by_quarter.sql)
 
 The challenge example lists `Staff / Recruiter` before `Staff / Manager`, which contradicts its own
 "ordered alphabetically" rule. The text is followed.
+
+### Departments above the mean
+
+```bash
+curl "http://localhost:8000/api/v1/metrics/departments-above-mean?year=2021"
+```
+
+```json
+[
+  {"id": 8, "department": "Support", "hired": 216},
+  {"id": 5, "department": "Engineering", "hired": 205}
+]
+```
+
+SQL: [`departments_above_mean.sql`](app/db/queries/departments_above_mean.sql)
+
+| Decision | Why |
+|---|---|
+| CTE with the hires per department, reused by the filter and the mean | The aggregation is written once and the query reads like the requirement |
+| `LEFT JOIN` from `departments` | "The mean ... for all the departments": a department without hires counts as 0 |
+| `hired` counts only the hires of the year | The value shown and the mean measure the same thing |
+| Strictly greater than the mean | "More employees than the mean"; a department exactly at the mean is excluded |
+| Ties ordered alphabetically | Deterministic output when two departments hired the same number |
 
 ## Assumptions
 
