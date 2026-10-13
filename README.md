@@ -18,6 +18,7 @@ code and container image target a serverless architecture on **AWS**.
 - [Data model](#data-model)
 - [Data quality rules](#data-quality-rules)
   - [Sample data profile](#sample-data-profile)
+- [Ingestion pipeline](#ingestion-pipeline)
 - [Development workflow](#development-workflow)
 - API reference _(coming soon)_
 - Assumptions _(coming soon)_
@@ -262,6 +263,42 @@ Profile of the files in [`data/`](data/), verified by
 The 70 rejected employees each miss exactly one field: `department_id` (21), `name` (19),
 `job_id` (16) and `datetime` (14). All valid rows reference existing departments and jobs, and
 there are no duplicated ids.
+
+## Ingestion pipeline
+
+The ingestion core ([`app/core/loader.py`](app/core/loader.py)) is shared by every entry point:
+the local upload endpoint and, on AWS, the S3-triggered loader Lambda.
+
+```mermaid
+flowchart LR
+    csv[/"CSV stream"/] --> reader["read_rows<br/>parse + validate"]
+    reader --> chunk["chunks of 1000 rows"]
+    chunk --> fk{"hired_employees?<br/>check FKs"}
+    fk -- "valid" --> upsert["upsert<br/>ON CONFLICT (id)"]
+    fk -- "invalid" --> rejections[("load_rejections")]
+    upsert --> tables[("business tables")]
+    chunk -. "COMMIT per chunk<br/>+ job counters" .-> job[("ingestion_jobs")]
+```
+
+1. An `ingestion_jobs` row is created (`PENDING`) and moved to `RUNNING`.
+2. The file is streamed and validated row by row, in chunks of 1000 rows.
+3. For `hired_employees`, referenced departments and jobs are checked with one query per chunk;
+   unknown ids are rejected with a reason such as `department_id: 99 does not exist`.
+4. Valid rows are written with `INSERT ... ON CONFLICT (id) DO UPDATE`; invalid rows go to
+   `load_rejections` with their line number, raw values and errors.
+5. Each chunk is committed together with the job counters (`rows_read`, `rows_loaded`,
+   `rows_rejected`). The job ends as `SUCCEEDED`, or `FAILED` with the error message.
+
+**Why commit per chunk instead of one transaction per file?** Short transactions keep memory and
+locks bounded for files of any size, and progress is visible while a large file loads. The cost,
+partially loaded data after a failure, is neutralized by **idempotent upserts**: re-running the
+load completes it without duplicates. That is also the behavior required by SQS, which delivers
+messages at least once.
+
+Other rules:
+
+- A repeated id within a file keeps its **last** occurrence, like successive upserts would.
+- `rows_loaded` counts accepted rows, including repeated ids that overwrite each other.
 
 ## Development workflow
 

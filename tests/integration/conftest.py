@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.orm import Session, sessionmaker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -64,3 +65,27 @@ def engine(database_url: str, alembic_config: Config) -> Iterator[Engine]:
     engine = create_engine(database_url)
     yield engine
     engine.dispose()
+
+
+def _truncate_all(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "TRUNCATE hired_employees, departments, jobs, load_rejections, ingestion_jobs "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
+
+
+@pytest.fixture
+def session_factory(engine: Engine) -> Iterator[sessionmaker[Session]]:
+    """Session factory on an empty database; every test starts and ends with clean tables."""
+    _truncate_all(engine)
+    yield sessionmaker(bind=engine, expire_on_commit=False)
+    _truncate_all(engine)
+
+
+@pytest.fixture
+def session(session_factory: sessionmaker[Session]) -> Iterator[Session]:
+    with session_factory() as session:
+        yield session
