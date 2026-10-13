@@ -1,5 +1,7 @@
 # Globant Data Engineering Coding Challenge
 
+[![CI](https://github.com/daniellozanoj/globant-coding-challenge/actions/workflows/ci.yml/badge.svg)](https://github.com/daniellozanoj/globant-coding-challenge/actions/workflows/ci.yml)
+
 REST API that migrates historical CSV data (`departments`, `jobs`, `hired_employees`) into a SQL
 database and supports batch inserts of 1 to 1000 rows per request.
 
@@ -35,7 +37,7 @@ code and container image target a serverless architecture on **AWS**.
 | 1. API | Insert batch transactions (1 to 1000 rows) in one request | ✅ Done |
 | 2. SQL | Hires per job and department in 2021 by quarter | ✅ Done |
 | 2. SQL | Departments that hired above the 2021 mean | ✅ Done |
-| Bonus | Automated tests | ✅ Done (unit + integration) |
+| Bonus | Automated tests | ✅ Done (unit + integration, run in CI on every PR) |
 | Bonus | Containerize the application (Dockerfile) | ✅ Done |
 | Bonus | Cloud hosting (AWS) | 🔜 Pending |
 
@@ -102,6 +104,7 @@ make stack-down
 
 ```
 .
+├── .github/workflows/ # CI pipeline
 ├── app/
 │   ├── api/           # HTTP layer (FastAPI routers)
 │   ├── core/          # Ingestion logic: CSV parsing, validation, loading (no HTTP/AWS deps)
@@ -682,3 +685,17 @@ Current suite: **99 tests, 98% line and branch coverage**.
 
 - One `feature/*` branch per step, merged into `main` through a Pull Request.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
+
+### Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on every
+push to `main`:
+
+| Job | What it checks |
+|---|---|
+| `lint` | `ruff check` and `ruff format --check` |
+| `test` | Full test suite with coverage against a PostgreSQL 16 service container (`TEST_DATABASE_URL`); the coverage table is published in the run summary |
+| `docker` | The image builds for `linux/arm64` (the AWS Lambda architecture) on a native arm64 runner, with layer caching |
+
+`main` is protected: changes go through pull requests, the three jobs must pass before merging,
+and force pushes and deletion are blocked.
