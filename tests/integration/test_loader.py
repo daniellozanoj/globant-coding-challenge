@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.csv_reader import ParsedRow, ValidRow
-from app.core.loader import load_csv, load_rows
+from app.core.loader import IngestionError, load_csv, load_rows
 from app.core.schemas import DepartmentRecord
 from app.core.tables import LOAD_ORDER, TableName
 from app.db import repository
@@ -132,8 +132,11 @@ def test_failure_marks_the_job_failed_and_keeps_committed_chunks(session: Sessio
 
     job = repository.create_ingestion_job(session, TableName.DEPARTMENTS, "flaky.csv")
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(IngestionError) as excinfo:
         load_rows(session, job, rows_then_crash(), chunk_size=2)
+
+    assert excinfo.value.job_id == job.id
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
 
     session.refresh(job)
     assert job.status == IngestionStatus.FAILED
