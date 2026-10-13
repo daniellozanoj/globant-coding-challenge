@@ -9,7 +9,7 @@ code and container image target a serverless architecture on **AWS**.
 ## Table of contents
 
 - [Challenge scope](#challenge-scope)
-- [Section 1 walkthrough](#section-1-walkthrough)
+- [Walkthrough](#walkthrough)
 - [Tech stack](#tech-stack)
 - [Repository structure](#repository-structure)
 - [Getting started](#getting-started)
@@ -39,9 +39,10 @@ code and container image target a serverless architecture on **AWS**.
 | Bonus | Containerize the application (Dockerfile) | ✅ Done |
 | Bonus | Cloud hosting (AWS) | 🔜 Pending |
 
-## Section 1 walkthrough
+## Walkthrough
 
-A five-minute tour of the Section 1 deliverables, running the same container image that targets AWS.
+A five-minute tour of the Section 1 and Section 2 deliverables, running the same container image
+that targets AWS.
 
 ```bash
 # 1. Start PostgreSQL, apply the migrations and run the API container
@@ -64,7 +65,11 @@ curl -s -X POST http://localhost:8000/api/v1/hired_employees/batch \
   -H "Content-Type: application/json" \
   -d '{"rows": [{"id": 1, "name": "Ana", "datetime": "2021-01-10T10:00:00Z", "department_id": 99, "job_id": 1}]}'
 
-# 6. Explore every endpoint in the OpenAPI docs: http://localhost:8000/docs
+# 6. Section 2 metrics for 2021 (add &format=csv to download them as CSV)
+curl -s "http://localhost:8000/api/v1/metrics/hires-by-quarter?year=2021"
+curl -s "http://localhost:8000/api/v1/metrics/departments-above-mean?year=2021"
+
+# 7. Explore every endpoint in the OpenAPI docs: http://localhost:8000/docs
 make stack-down
 ```
 
@@ -74,6 +79,8 @@ make stack-down
 | Upload the files to the new SQL database | same as above | [`app/core/loader.py`](app/core/loader.py), [`app/db/repository.py`](app/db/repository.py) | [`test_loader.py`](tests/integration/test_loader.py) |
 | Batch transactions of 1 to 1000 rows | `POST /api/v1/{table}/batch` | [`app/api/batches.py`](app/api/batches.py), [`app/core/batch.py`](app/core/batch.py) | [`test_batch_api.py`](tests/integration/test_batch_api.py) |
 | SQL database | PostgreSQL 16 / Aurora PostgreSQL | [`app/db/models.py`](app/db/models.py), [`migrations/`](migrations/) | [`test_migrations.py`](tests/integration/test_migrations.py) |
+| Hires per department and job in 2021 by quarter | `GET /api/v1/metrics/hires-by-quarter` | [`hires_by_quarter.sql`](app/db/queries/hires_by_quarter.sql) | [`test_metrics_api.py`](tests/integration/test_metrics_api.py) |
+| Departments that hired more than the 2021 mean | `GET /api/v1/metrics/departments-above-mean` | [`departments_above_mean.sql`](app/db/queries/departments_above_mean.sql) | [`test_metrics_api.py`](tests/integration/test_metrics_api.py) |
 
 ## Tech stack
 
@@ -592,6 +599,44 @@ SQL: [`departments_above_mean.sql`](app/db/queries/departments_above_mean.sql)
 | Strictly greater than the mean | "More employees than the mean"; a department exactly at the mean is excluded |
 | Ties ordered alphabetically | Deterministic output when two departments hired the same number |
 
+### Results on the sample data (2021)
+
+1,643 employees were hired in 2021 (rows rejected during ingestion are excluded), across all
+12 departments and 933 department/job combinations. Hires per quarter:
+
+| Q1 | Q2 | Q3 | Q4 | Total |
+|---|---|---|---|---|
+| 249 | 454 | 453 | 487 | 1,643 |
+
+**Hires by quarter**: 933 rows; the first ones are:
+
+| department | job | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|---|
+| Accounting | Account Representative IV | 1 | 0 | 0 | 0 |
+| Accounting | Actuary | 0 | 1 | 0 | 0 |
+| Accounting | Analyst Programmer | 0 | 0 | 1 | 0 |
+| Accounting | Budget/Accounting Analyst III | 0 | 1 | 0 | 0 |
+| Accounting | Cost Accountant | 0 | 1 | 0 | 0 |
+
+**Departments above the mean**: the mean is 1,643 / 12 = **136.92** hires per department, and
+7 departments are above it:
+
+| id | department | hired |
+|---|---|---|
+| 8 | Support | 216 |
+| 5 | Engineering | 205 |
+| 6 | Human Resources | 201 |
+| 7 | Services | 200 |
+| 4 | Business Development | 185 |
+| 3 | Research and Development | 148 |
+| 9 | Marketing | 142 |
+
+Below the mean: Training (111), Sales (93), Legal (56), Product Management (48) and
+Accounting (38). Every department hired in 2021, so counting departments without hires in the mean
+does not change this result; it is still the documented rule.
+
+Both results are asserted by [`test_metrics_api.py`](tests/integration/test_metrics_api.py).
+
 ## Assumptions
 
 | Topic | Assumption | Rationale |
@@ -607,6 +652,10 @@ SQL: [`departments_above_mean.sql`](app/db/queries/departments_above_mean.sql)
 | Batch atomicity | A batch is all or nothing | Clear contract: the client fixes the batch and retries it |
 | Load order | `departments` and `jobs` are loaded before `hired_employees` | Foreign keys; the historical endpoint enforces the order |
 | Processing mode | Local loads are synchronous; on AWS they are asynchronous (S3 → SQS → Lambda) | Section 1 asks for a local API; files of any size are handled asynchronously in the cloud |
+| Metrics year | Years are calendar years in UTC; the endpoints default to 2021 and accept any year from 2000 to 2100 | The requirements ask for 2021; the parameter costs nothing |
+| Quarter table rows | Only department/job pairs with at least one hire in the year | Matches the challenge example |
+| Alphabetical order | Linguistic (ICU) order, not byte order; the challenge example contradicts its own rule (`Recruiter` before `Manager`) and the text is followed | Same order locally and on Aurora |
+| Mean of hires | Computed over **all** departments, counting departments without hires as 0; `hired` counts only the hires of the year; "more than" is strict | Literal reading of the requirement |
 | Authentication | None in the local API; Cognito JWT at API Gateway on AWS | Keeps the application auth-agnostic ([ADR-007](docs/architecture.md#adr-007--cognito-jwt-authorizer-at-api-gateway)) |
 
 ## Development workflow
@@ -624,12 +673,12 @@ Integration tests run against a real PostgreSQL 16: a throwaway container starte
 [testcontainers](https://testcontainers-python.readthedocs.io/), or the database in
 `TEST_DATABASE_URL` when set (e.g. a CI service container).
 
-Current suite: **79 tests, 97% line and branch coverage**.
+Current suite: **99 tests, 98% line and branch coverage**.
 
 | Level | Scope | Examples |
 |---|---|---|
 | Unit | Settings, schemas, CSV reader, sample data profile | Datetime rules, CRLF/BOM handling, the 70 rejected rows |
-| Integration | Migrations, loader, ingestion API, batch API on PostgreSQL 16 | Idempotent reloads, all-or-nothing batches, FK race returning `409` |
+| Integration | Migrations, loader, ingestion, batch and metrics APIs on PostgreSQL 16 | Idempotent reloads, all-or-nothing batches, quarter boundaries, metrics under a non-UTC session |
 
 - One `feature/*` branch per step, merged into `main` through a Pull Request.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
