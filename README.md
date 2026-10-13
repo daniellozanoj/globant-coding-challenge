@@ -15,8 +15,8 @@ code and container image target a serverless architecture on **AWS**.
   - [Local environment](#local-environment)
   - [Configuration](#configuration)
 - [Architecture](#architecture)
+- [Data model](#data-model)
 - [Development workflow](#development-workflow)
-- Data model _(coming soon)_
 - API reference _(coming soon)_
 - Data quality rules _(coming soon)_
 - Assumptions _(coming soon)_
@@ -39,12 +39,14 @@ code and container image target a serverless architecture on **AWS**.
 | Language | Python 3.12 | Data engineering ecosystem, typing, AWS Lambda support |
 | API framework | FastAPI | Pydantic validation and automatic OpenAPI docs |
 | Validation | Pydantic v2 | Per-row validation of CSV records and request payloads |
+| ORM / SQL toolkit | SQLAlchemy 2 + psycopg 3 | Typed models, dialect-specific upserts, connection pooling |
+| Schema migrations | Alembic | Versioned, reviewable schema changes |
 | Configuration | pydantic-settings | Typed settings from environment variables, same config locally and on AWS |
 | Database | PostgreSQL (Aurora PostgreSQL Serverless v2 on AWS) | Transactional workload, native upsert (`ON CONFLICT`), rich analytical SQL |
 | Local infrastructure | Docker Compose | PostgreSQL 16 with healthcheck, matching the Aurora major version |
 | Package manager | [uv](https://docs.astral.sh/uv/) | Fast, reproducible installs with a lockfile |
 | Lint / format | Ruff | Single fast tool for linting and formatting |
-| Tests | pytest | De facto standard for Python testing |
+| Tests | pytest + testcontainers | Unit tests plus integration tests against a real PostgreSQL |
 
 ## Repository structure
 
@@ -58,10 +60,12 @@ code and container image target a serverless architecture on **AWS**.
 │   ├── config.py      # Settings from environment variables
 │   └── main.py        # FastAPI application factory
 ├── docs/              # Architecture and design decisions
+├── migrations/        # Alembic environment and versioned migrations
 ├── tests/
 │   ├── unit/          # Fast tests, no external services
 │   └── integration/   # Tests against a real PostgreSQL
 ├── .env.example       # Configuration template
+├── alembic.ini        # Alembic configuration (URL comes from settings)
 ├── docker-compose.yml # Local PostgreSQL
 ├── Makefile           # Common developer commands
 └── pyproject.toml     # Dependencies and tool configuration
@@ -77,6 +81,7 @@ Prerequisites:
 ```bash
 make install   # create .venv and install dependencies
 make up        # start PostgreSQL 16 and wait until it is healthy
+make migrate   # create the schema (alembic upgrade head)
 make run       # start the API on http://localhost:8000
 ```
 
@@ -143,13 +148,96 @@ Idle cost is estimated at **~1–3 USD/month**, versus ~70–80 USD/month for an
 stack. Full details, data flows, cost model and architecture decision records (ADRs):
 **[docs/architecture.md](docs/architecture.md)**.
 
+## Data model
+
+```mermaid
+erDiagram
+    departments ||--o{ hired_employees : "has"
+    jobs ||--o{ hired_employees : "has"
+    ingestion_jobs ||--o{ load_rejections : "produces"
+
+    departments {
+        int id PK
+        varchar department
+    }
+    jobs {
+        int id PK
+        varchar job
+    }
+    hired_employees {
+        int id PK
+        varchar name
+        timestamptz datetime
+        int department_id FK
+        int job_id FK
+    }
+    ingestion_jobs {
+        uuid id PK
+        varchar table_name
+        text source
+        varchar status
+        int rows_read
+        int rows_loaded
+        int rows_rejected
+        text error
+        timestamptz created_at
+        timestamptz started_at
+        timestamptz finished_at
+    }
+    load_rejections {
+        bigint id PK
+        uuid job_id FK
+        int line_number
+        jsonb raw_record
+        jsonb errors
+        timestamptz rejected_at
+    }
+```
+
+**Business tables** (`departments`, `jobs`, `hired_employees`) mirror the CSV files:
+
+- Primary keys are the ids from the source system; they are never generated, so the migration
+  preserves them.
+- Every business column is `NOT NULL`, and `hired_employees` has foreign keys to `departments`
+  and `jobs`.
+- `datetime` is stored as `timestamptz`: the source values are UTC (`Z` suffix), which makes the
+  quarter calculations of Section 2 unambiguous.
+- Indexes on `datetime`, `department_id` and `job_id` support the yearly filters and joins of the
+  Section 2 metrics.
+
+**Ingestion audit tables**:
+
+- `ingestion_jobs`: one row per CSV load with its source, lifecycle
+  (`PENDING → RUNNING → SUCCEEDED | FAILED`) and row counters.
+- `load_rejections`: every row that failed validation, with the original values and the errors,
+  linked to its load. Deleting a job cascades to its rejections.
+
+### Migrations
+
+The schema is managed with [Alembic](https://alembic.sqlalchemy.org/). Constraint and index names
+follow a fixed naming convention (`pk_`, `fk_`, `ix_`, `ck_`), so migrations are deterministic.
+
+```bash
+make migrate                         # apply pending migrations
+make revision m="add column x"       # autogenerate a migration from model changes
+uv run alembic downgrade -1          # roll back the last migration
+```
+
+An integration test fails if the models and the migrations drift apart.
+
 ## Development workflow
 
 ```bash
 make lint      # ruff check + format check
 make format    # auto-fix and format
-make test      # run the test suite
+make test             # whole suite (starts a throwaway PostgreSQL container)
+make test-unit        # fast unit tests only
+make test-integration # integration tests only
 ```
+
+Integration tests run against a real PostgreSQL 16: a throwaway container started with
+[testcontainers](https://testcontainers-python.readthedocs.io/), or the database in
+`TEST_DATABASE_URL` when set (e.g. a CI service container).
 
 - One `feature/*` branch per step, merged into `main` through a Pull Request.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
