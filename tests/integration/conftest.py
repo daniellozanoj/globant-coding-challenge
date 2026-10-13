@@ -7,7 +7,6 @@ otherwise a throwaway PostgreSQL 16 container is started with testcontainers.
 import os
 import subprocess
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 from alembic import command
@@ -19,9 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings, get_settings
 from app.db.session import get_session
 from app.main import create_app
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data"
+from tests.support import DATA_DIR, PROJECT_ROOT
 
 
 def _configure_docker_host() -> None:

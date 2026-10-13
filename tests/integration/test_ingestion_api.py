@@ -4,10 +4,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from tests.support import DATA_DIR
 
 pytestmark = pytest.mark.integration
-
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 def upload(client: TestClient, table: str, content: bytes, filename: str = "file.csv", **params):

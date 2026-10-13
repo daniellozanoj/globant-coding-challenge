@@ -1,6 +1,5 @@
 import io
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
@@ -19,10 +18,9 @@ from app.db.models import (
     Job,
     LoadRejection,
 )
+from tests.support import DATA_DIR
 
 pytestmark = pytest.mark.integration
-
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 def load_text(session: Session, table: TableName, content: str, **kwargs) -> IngestionJob:

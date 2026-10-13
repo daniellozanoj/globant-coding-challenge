@@ -9,6 +9,7 @@ code and container image target a serverless architecture on **AWS**.
 ## Table of contents
 
 - [Challenge scope](#challenge-scope)
+- [Section 1 walkthrough](#section-1-walkthrough)
 - [Tech stack](#tech-stack)
 - [Repository structure](#repository-structure)
 - [Getting started](#getting-started)
@@ -21,8 +22,8 @@ code and container image target a serverless architecture on **AWS**.
   - [Sample data profile](#sample-data-profile)
 - [Ingestion pipeline](#ingestion-pipeline)
 - [API reference](#api-reference)
+- [Assumptions](#assumptions)
 - [Development workflow](#development-workflow)
-- Assumptions _(coming soon)_
 
 ## Challenge scope
 
@@ -36,6 +37,42 @@ code and container image target a serverless architecture on **AWS**.
 | Bonus | Automated tests | ✅ Done (unit + integration) |
 | Bonus | Containerize the application (Dockerfile) | ✅ Done |
 | Bonus | Cloud hosting (AWS) | 🔜 Pending |
+
+## Section 1 walkthrough
+
+A five-minute tour of the Section 1 deliverables, running the same container image that targets AWS.
+
+```bash
+# 1. Start PostgreSQL, apply the migrations and run the API container
+make stack
+
+# 2. Receive the historical CSV files and upload them to the database
+curl -s -X POST http://localhost:8000/api/v1/ingestions/historical
+
+# 3. Audit the 70 rows rejected from hired_employees.csv
+#    (replace <job_id> with the hired_employees job id returned by step 2)
+curl -s "http://localhost:8000/api/v1/ingestions/<job_id>/rejections?limit=5"
+
+# 4. Insert a batch transaction (1 to 1000 rows) with one request
+curl -s -X POST http://localhost:8000/api/v1/jobs/batch \
+  -H "Content-Type: application/json" \
+  -d '{"rows": [{"id": 184, "job": "Data Engineer"}, {"id": 185, "job": "Data Architect"}]}'
+
+# 5. An invalid row rejects the whole batch (nothing is written)
+curl -s -X POST http://localhost:8000/api/v1/hired_employees/batch \
+  -H "Content-Type: application/json" \
+  -d '{"rows": [{"id": 1, "name": "Ana", "datetime": "2021-01-10T10:00:00Z", "department_id": 99, "job_id": 1}]}'
+
+# 6. Explore every endpoint in the OpenAPI docs: http://localhost:8000/docs
+make stack-down
+```
+
+| Requirement | Endpoint | Implementation | Tests |
+|---|---|---|---|
+| Receive historical data from CSV files | `POST /api/v1/ingestions/historical`, `POST /api/v1/ingestions/{table}` | [`app/api/ingestions.py`](app/api/ingestions.py), [`app/core/csv_reader.py`](app/core/csv_reader.py) | [`test_ingestion_api.py`](tests/integration/test_ingestion_api.py), [`test_csv_reader.py`](tests/unit/test_csv_reader.py) |
+| Upload the files to the new SQL database | same as above | [`app/core/loader.py`](app/core/loader.py), [`app/db/repository.py`](app/db/repository.py) | [`test_loader.py`](tests/integration/test_loader.py) |
+| Batch transactions of 1 to 1000 rows | `POST /api/v1/{table}/batch` | [`app/api/batches.py`](app/api/batches.py), [`app/core/batch.py`](app/core/batch.py) | [`test_batch_api.py`](tests/integration/test_batch_api.py) |
+| SQL database | PostgreSQL 16 / Aurora PostgreSQL | [`app/db/models.py`](app/db/models.py), [`migrations/`](migrations/) | [`test_migrations.py`](tests/integration/test_migrations.py) |
 
 ## Tech stack
 
@@ -487,6 +524,23 @@ after a timeout, and batches behave like the CSV migration.
 | `422` | Unknown table name, invalid parameters, or invalid batch rows (nothing written) |
 | `500` | Unexpected failure. The job is marked `FAILED`, and the load can be safely retried |
 
+## Assumptions
+
+| Topic | Assumption | Rationale |
+|---|---|---|
+| Table names | The employees table is `hired_employees` (the challenge text says `employees`) | Same name as the source file, so the mapping is direct |
+| CSV format | Comma separated, UTF-8, **no header** (an optional header can be skipped) | Matches the provided files |
+| Column order | As documented in the challenge (`id, name, datetime, department_id, job_id`) | The files have no header to map by name |
+| Time zone | `datetime` values are UTC (`Z` suffix) and stored as `timestamptz` | Quarters in Section 2 must not depend on the server time zone |
+| Ids | Ids come from the source system and are preserved | It is a migration: other systems may reference them |
+| Invalid rows | Loaded files keep their valid rows; invalid rows are quarantined in `load_rejections` | A few bad rows should not block a migration, and nothing is silently lost |
+| Existing ids | Writes are upserts: an existing id is updated | Safe retries for both the CSV loader and the batch endpoint |
+| Repeated ids in a file | The last occurrence wins | Same result as applying the rows in order |
+| Batch atomicity | A batch is all or nothing | Clear contract: the client fixes the batch and retries it |
+| Load order | `departments` and `jobs` are loaded before `hired_employees` | Foreign keys; the historical endpoint enforces the order |
+| Processing mode | Local loads are synchronous; on AWS they are asynchronous (S3 → SQS → Lambda) | Section 1 asks for a local API; files of any size are handled asynchronously in the cloud |
+| Authentication | None in the local API; Cognito JWT at API Gateway on AWS | Keeps the application auth-agnostic ([ADR-007](docs/architecture.md#adr-007--cognito-jwt-authorizer-at-api-gateway)) |
+
 ## Development workflow
 
 ```bash
@@ -495,11 +549,19 @@ make format    # auto-fix and format
 make test             # whole suite (starts a throwaway PostgreSQL container)
 make test-unit        # fast unit tests only
 make test-integration # integration tests only
+make coverage         # whole suite with a coverage report
 ```
 
 Integration tests run against a real PostgreSQL 16: a throwaway container started with
 [testcontainers](https://testcontainers-python.readthedocs.io/), or the database in
 `TEST_DATABASE_URL` when set (e.g. a CI service container).
+
+Current suite: **79 tests, 97% line and branch coverage**.
+
+| Level | Scope | Examples |
+|---|---|---|
+| Unit | Settings, schemas, CSV reader, sample data profile | Datetime rules, CRLF/BOM handling, the 70 rejected rows |
+| Integration | Migrations, loader, ingestion API, batch API on PostgreSQL 16 | Idempotent reloads, all-or-nothing batches, FK race returning `409` |
 
 - One `feature/*` branch per step, merged into `main` through a Pull Request.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
