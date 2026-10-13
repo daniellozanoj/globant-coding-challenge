@@ -22,6 +22,7 @@ code and container image target a serverless architecture on **AWS**.
   - [Sample data profile](#sample-data-profile)
 - [Ingestion pipeline](#ingestion-pipeline)
 - [API reference](#api-reference)
+- [Section 2: SQL metrics](#section-2-sql-metrics)
 - [Assumptions](#assumptions)
 - [Development workflow](#development-workflow)
 
@@ -32,7 +33,7 @@ code and container image target a serverless architecture on **AWS**.
 | 1. API | Receive historical data from CSV files | ✅ Done |
 | 1. API | Upload the files to the new SQL database | ✅ Done |
 | 1. API | Insert batch transactions (1 to 1000 rows) in one request | ✅ Done |
-| 2. SQL | Hires per job and department in 2021 by quarter | 🔜 Pending |
+| 2. SQL | Hires per job and department in 2021 by quarter | ✅ Done |
 | 2. SQL | Departments that hired above the 2021 mean | 🔜 Pending |
 | Bonus | Automated tests | ✅ Done (unit + integration) |
 | Bonus | Containerize the application (Dockerfile) | ✅ Done |
@@ -97,7 +98,8 @@ make stack-down
 ├── app/
 │   ├── api/           # HTTP layer (FastAPI routers)
 │   ├── core/          # Ingestion logic: CSV parsing, validation, loading (no HTTP/AWS deps)
-│   ├── db/            # SQLAlchemy models, session and repositories
+│   ├── db/            # SQLAlchemy models, session, repositories and metrics
+│   │   └── queries/   # Section 2 SQL, as plain .sql files
 │   ├── handlers/      # AWS Lambda entry points (event-driven loader)
 │   ├── config.py      # Settings from environment variables
 │   └── main.py        # FastAPI application factory
@@ -393,6 +395,7 @@ Interactive OpenAPI documentation is served at http://localhost:8000/docs.
 | `POST` | `/api/v1/departments/batch` | Insert or update 1 to 1000 departments in one transaction |
 | `POST` | `/api/v1/jobs/batch` | Insert or update 1 to 1000 jobs in one transaction |
 | `POST` | `/api/v1/hired_employees/batch` | Insert or update 1 to 1000 hired employees in one transaction |
+| `GET` | `/api/v1/metrics/hires-by-quarter` | Hires per department and job in a year, by quarter (JSON or CSV) |
 
 Loads run synchronously in the local API. On AWS the same loader runs asynchronously behind
 S3 and SQS ([ADR-003](docs/architecture.md#adr-003--direct-to-s3-uploads-with-presigned-urls-and-an-sqs-triggered-loader)).
@@ -523,6 +526,46 @@ after a timeout, and batches behave like the CSV migration.
 | `415` | The uploaded file is not a `.csv` |
 | `422` | Unknown table name, invalid parameters, or invalid batch rows (nothing written) |
 | `500` | Unexpected failure. The job is marked `FAILED`, and the load can be safely retried |
+
+## Section 2: SQL metrics
+
+One endpoint per stakeholder requirement. The SQL lives in plain `.sql` files under
+[`app/db/queries/`](app/db/queries/) so it can be reviewed without Python around it, and the year
+is always a bound parameter.
+
+| Endpoint | Requirement |
+|---|---|
+| `GET /api/v1/metrics/hires-by-quarter?year=2021` | Hires per department and job in 2021, divided by quarter, ordered alphabetically by department and job |
+
+Both JSON (default) and CSV are supported: send `Accept: text/csv` or add `?format=csv` to get a
+file stakeholders can open directly in a spreadsheet.
+
+### Hires by quarter
+
+```bash
+curl "http://localhost:8000/api/v1/metrics/hires-by-quarter?year=2021"
+curl -OJ "http://localhost:8000/api/v1/metrics/hires-by-quarter?year=2021&format=csv"
+```
+
+```json
+[
+  {"department": "Accounting", "job": "Account Representative IV", "Q1": 1, "Q2": 0, "Q3": 0, "Q4": 0},
+  {"department": "Accounting", "job": "Actuary", "Q1": 0, "Q2": 1, "Q3": 0, "Q4": 0}
+]
+```
+
+SQL: [`hires_by_quarter.sql`](app/db/queries/hires_by_quarter.sql)
+
+| Decision | Why |
+|---|---|
+| `COUNT(*) FILTER (WHERE EXTRACT(QUARTER ...) = n)` | Pivots the four quarters in a single pass; clearer than `SUM(CASE ...)` |
+| Half-open range `datetime >= 2021-01-01Z AND datetime < 2022-01-01Z` | Uses the index on `datetime`; `EXTRACT(YEAR FROM datetime) = 2021` would not |
+| `AT TIME ZONE 'UTC'` | Quarters do not depend on the session or server time zone (a test runs the query with an `America/Bogota` session) |
+| `ORDER BY ... COLLATE "und-x-icu"` | True alphabetical order, identical locally and on Aurora. With byte order, 13 job names move (e.g. `GIS Technical Architect` before `General Manager`) |
+| Only department/job pairs with at least one hire | Matches the challenge example; listing all 2,196 pairs would be mostly zeros |
+
+The challenge example lists `Staff / Recruiter` before `Staff / Manager`, which contradicts its own
+"ordered alphabetically" rule. The text is followed.
 
 ## Assumptions
 
