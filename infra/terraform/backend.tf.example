@@ -1,0 +1,11 @@
+# Remote state in S3 with native locking (Terraform >= 1.10, no DynamoDB table needed).
+# Copy to backend.tf and adjust before the first `terraform init`.
+terraform {
+  backend "s3" {
+    bucket       = "my-terraform-state-bucket"
+    key          = "globant-challenge/dev/terraform.tfstate"
+    region       = "us-east-1"
+    encrypt      = true
+    use_lockfile = true
+  }
+}

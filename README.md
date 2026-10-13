@@ -24,6 +24,7 @@ code and container image target a serverless architecture on **AWS**.
   - [Sample data profile](#sample-data-profile)
 - [Ingestion pipeline](#ingestion-pipeline)
 - [Event-driven loader (AWS)](#event-driven-loader-aws)
+- [Infrastructure as code](#infrastructure-as-code)
 - [API reference](#api-reference)
 - [Section 2: SQL metrics](#section-2-sql-metrics)
 - [Assumptions](#assumptions)
@@ -117,6 +118,7 @@ make stack-down
 │   └── main.py        # FastAPI application factory
 ├── data/              # CSV files provided with the challenge (no header)
 ├── docs/              # Architecture and design decisions
+├── infra/terraform/   # AWS infrastructure as code
 ├── migrations/        # Alembic environment and versioned migrations
 ├── tests/
 │   ├── unit/          # Fast tests, no external services
@@ -430,6 +432,28 @@ flowchart LR
 
 Rejected rows are stored in `load_rejections` and mirrored to `rejected/{table}/{job_id}.csv` in
 the bucket for data stewards.
+
+## Infrastructure as code
+
+The AWS architecture is defined with Terraform in [`infra/terraform/`](infra/terraform/).
+Validation runs through Docker, so it needs neither a Terraform install nor AWS credentials:
+
+```bash
+make tf-fmt        # format
+make tf-validate   # fmt check + init (no backend) + validate
+make tf-lint       # tflint with the AWS ruleset
+```
+
+| File | Resources |
+|---|---|
+| `network.tf` | Private-only VPC across 2 AZs: no internet or NAT gateway, S3 gateway endpoint, security groups (Lambdas → Aurora 5432 and S3 only) |
+| `database.tf` | Aurora PostgreSQL 16 Serverless v2 (0 to 4 ACU, auto-pause), IAM authentication, RDS-managed master secret, encryption, Data API for bootstrap |
+| `storage.tf` | Raw bucket: public access blocked, SSE-S3, versioning, TLS-only policy, lifecycle (`landing/` to Standard-IA), `landing/*.csv` notifications to SQS |
+| `queue.tf` | Loader queue (visibility timeout 6x the loader timeout) with a DLQ after 3 attempts, SSE, least-privilege queue policy |
+| `variables.tf` | Sizing and safety knobs with dev defaults (e.g. `db_min_capacity`, `deletion_protection`) |
+
+Provider versions are pinned in `.terraform.lock.hcl` for Linux and macOS (x86 and arm).
+State goes to S3 with native locking ([`backend.tf.example`](infra/terraform/backend.tf.example)).
 
 ## API reference
 

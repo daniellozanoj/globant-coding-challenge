@@ -1,4 +1,4 @@
-.PHONY: install lint format test test-unit test-integration coverage run up down logs psql migrate revision image stack stack-down
+.PHONY: install lint format test test-unit test-integration coverage run up down logs psql migrate revision image stack stack-down tf-fmt tf-validate tf-lint
 
 install: ## Install runtime and dev dependencies
 	uv sync
@@ -52,3 +52,20 @@ stack: ## Run the containerized stack: PostgreSQL -> migrations -> API on :8000
 
 stack-down: ## Stop the containerized stack
 	docker compose --profile app down
+
+# --- Terraform (run through Docker: nothing to install, no AWS credentials needed) ---
+TF_DIR := infra/terraform
+TERRAFORM := docker run --rm -v $(CURDIR)/$(TF_DIR):/tf -w /tf hashicorp/terraform:1.16.5
+TFLINT := docker run --rm -v $(CURDIR)/$(TF_DIR):/data -w /data -e TFLINT_PLUGIN_DIR=/data/.tflint.d ghcr.io/terraform-linters/tflint:v0.64.0
+
+tf-fmt: ## Format the Terraform code
+	$(TERRAFORM) fmt -recursive
+
+tf-validate: ## Check formatting and validate the Terraform configuration
+	$(TERRAFORM) fmt -check -diff -recursive
+	$(TERRAFORM) init -backend=false -input=false
+	$(TERRAFORM) validate
+
+tf-lint: ## Lint the Terraform code with tflint and the AWS ruleset
+	$(TFLINT) --init
+	$(TFLINT) --format compact
