@@ -41,7 +41,7 @@ code and container image target a serverless architecture on **AWS**.
 | 2. SQL | Departments that hired above the 2021 mean | ✅ Done |
 | Bonus | Automated tests | ✅ Done (unit + integration, run in CI on every PR) |
 | Bonus | Containerize the application (Dockerfile) | ✅ Done |
-| Bonus | Cloud hosting (AWS) | 🔜 Pending |
+| Bonus | Cloud hosting (AWS) | 🟡 Infrastructure as code ready and validated, [deployment guide](docs/deployment.md); not applied |
 
 ## Walkthrough
 
@@ -117,9 +117,10 @@ make stack-down
 │   ├── config.py      # Settings from environment variables
 │   └── main.py        # FastAPI application factory
 ├── data/              # CSV files provided with the challenge (no header)
-├── docs/              # Architecture and design decisions
+├── docs/              # Architecture, design decisions and AWS deployment guide
 ├── infra/terraform/   # AWS infrastructure as code
 ├── migrations/        # Alembic environment and versioned migrations
+├── scripts/           # Operational scripts (database user bootstrap)
 ├── tests/
 │   ├── unit/          # Fast tests, no external services
 │   └── integration/   # Tests against a real PostgreSQL
@@ -441,8 +442,17 @@ Validation runs through Docker, so it needs neither a Terraform install nor AWS 
 ```bash
 make tf-fmt        # format
 make tf-validate   # fmt check + init (no backend) + validate
+make tf-test       # plan-time tests with a mocked AWS provider
 make tf-lint       # tflint with the AWS ruleset
 ```
+
+[`tests/plan.tftest.hcl`](infra/terraform/tests/plan.tftest.hcl) runs `terraform plan` with a
+**mocked AWS provider** (no account, no credentials) and asserts the architecture decisions: private
+multi-AZ subnets, Aurora reachable only from the Lambdas, IAM auth and scale-to-zero in dev versus
+warm capacity and deletion protection in prod, a locked-down bucket, the 6x visibility timeout and
+partial batch responses, one arm64 image for both Lambdas with the internal route only on the
+loader, and only `/health` and the docs public. A real `plan` against AWS belongs to the
+continuous delivery pipeline ([deployment guide](docs/deployment.md#continuous-delivery-next-step)).
 
 | File | Resources |
 |---|---|
@@ -460,6 +470,10 @@ make tf-lint       # tflint with the AWS ruleset
 
 Provider versions are pinned in `.terraform.lock.hcl` for Linux and macOS (x86 and arm).
 State goes to S3 with native locking ([`backend.tf.example`](infra/terraform/backend.tf.example)).
+
+**Deploying:** [docs/deployment.md](docs/deployment.md) walks through the first deployment
+(registry, image, stack, database user bootstrap through the RDS Data API, migrations, Cognito
+user and token), an end-to-end test of the asynchronous S3 → SQS → Lambda flow, and the teardown.
 
 ## API reference
 
@@ -778,12 +792,13 @@ Integration tests run against a real PostgreSQL 16: a throwaway container starte
 [testcontainers](https://testcontainers-python.readthedocs.io/), or the database in
 `TEST_DATABASE_URL` when set (e.g. a CI service container).
 
-Current suite: **99 tests, 98% line and branch coverage**.
+Current suite: **123 tests, 98% line and branch coverage**.
 
 | Level | Scope | Examples |
 |---|---|---|
 | Unit | Settings, schemas, CSV reader, sample data profile | Datetime rules, CRLF/BOM handling, the 70 rejected rows |
-| Integration | Migrations, loader, ingestion, batch and metrics APIs on PostgreSQL 16 | Idempotent reloads, all-or-nothing batches, quarter boundaries, metrics under a non-UTC session |
+| Unit (AWS) | S3 landing key contract, RDS IAM token and engine wiring | SigV4 presigning, TLS required with IAM auth |
+| Integration | Migrations, loader, ingestion, batch, metrics and uploads APIs, event-driven loader (moto) on PostgreSQL 16 | Idempotent reloads, all-or-nothing batches, quarter boundaries, partial SQS batch failures |
 
 - One `feature/*` branch per step, merged into `main` through a Pull Request.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
@@ -798,6 +813,7 @@ push to `main`:
 | `lint` | `ruff check` and `ruff format --check` |
 | `test` | Full test suite with coverage against a PostgreSQL 16 service container (`TEST_DATABASE_URL`); the coverage table is published in the run summary |
 | `docker` | The image builds for `linux/arm64` (the AWS Lambda architecture) on a native arm64 runner, with layer caching |
+| `terraform` | `terraform fmt -check`, `terraform validate`, `terraform test` (plan with a mocked provider) and `tflint` (AWS ruleset), with the same pinned Docker images as the Makefile |
 
-`main` is protected: changes go through pull requests, the three jobs must pass before merging,
-and force pushes and deletion are blocked.
+`main` is protected: changes go through pull requests, the `lint`, `test`, `docker` and
+`terraform` jobs must pass before merging, and force pushes and deletion are blocked.
