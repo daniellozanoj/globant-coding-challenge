@@ -12,6 +12,8 @@ code and container image target a serverless architecture on **AWS**.
 - [Tech stack](#tech-stack)
 - [Repository structure](#repository-structure)
 - [Getting started](#getting-started)
+  - [Local environment](#local-environment)
+  - [Configuration](#configuration)
 - [Architecture](#architecture)
 - [Development workflow](#development-workflow)
 - Data model _(coming soon)_
@@ -37,7 +39,9 @@ code and container image target a serverless architecture on **AWS**.
 | Language | Python 3.12 | Data engineering ecosystem, typing, AWS Lambda support |
 | API framework | FastAPI | Pydantic validation and automatic OpenAPI docs |
 | Validation | Pydantic v2 | Per-row validation of CSV records and request payloads |
+| Configuration | pydantic-settings | Typed settings from environment variables, same config locally and on AWS |
 | Database | PostgreSQL (Aurora PostgreSQL Serverless v2 on AWS) | Transactional workload, native upsert (`ON CONFLICT`), rich analytical SQL |
+| Local infrastructure | Docker Compose | PostgreSQL 16 with healthcheck, matching the Aurora major version |
 | Package manager | [uv](https://docs.astral.sh/uv/) | Fast, reproducible installs with a lockfile |
 | Lint / format | Ruff | Single fast tool for linting and formatting |
 | Tests | pytest | De facto standard for Python testing |
@@ -47,26 +51,32 @@ code and container image target a serverless architecture on **AWS**.
 ```
 .
 ├── app/
-│   ├── api/          # HTTP layer (FastAPI routers)
-│   ├── core/         # Ingestion logic: CSV parsing, validation, loading (no HTTP/AWS deps)
-│   ├── db/           # SQLAlchemy models, session and repositories
-│   ├── handlers/     # AWS Lambda entry points (event-driven loader)
-│   └── main.py       # FastAPI application factory
-├── docs/             # Architecture and design decisions
+│   ├── api/           # HTTP layer (FastAPI routers)
+│   ├── core/          # Ingestion logic: CSV parsing, validation, loading (no HTTP/AWS deps)
+│   ├── db/            # SQLAlchemy models, session and repositories
+│   ├── handlers/      # AWS Lambda entry points (event-driven loader)
+│   ├── config.py      # Settings from environment variables
+│   └── main.py        # FastAPI application factory
+├── docs/              # Architecture and design decisions
 ├── tests/
-│   ├── unit/         # Fast tests, no external services
-│   └── integration/  # Tests against a real PostgreSQL
-├── Makefile          # Common developer commands
-└── pyproject.toml    # Dependencies and tool configuration
+│   ├── unit/          # Fast tests, no external services
+│   └── integration/   # Tests against a real PostgreSQL
+├── .env.example       # Configuration template
+├── docker-compose.yml # Local PostgreSQL
+├── Makefile           # Common developer commands
+└── pyproject.toml     # Dependencies and tool configuration
 ```
 
 ## Getting started
 
-Prerequisites: [uv](https://docs.astral.sh/uv/getting-started/installation/) (it installs
-Python 3.12 automatically if needed).
+Prerequisites:
+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) (installs Python 3.12 if needed)
+- Docker with Compose v2 (Docker Desktop, Colima or OrbStack)
 
 ```bash
 make install   # create .venv and install dependencies
+make up        # start PostgreSQL 16 and wait until it is healthy
 make run       # start the API on http://localhost:8000
 ```
 
@@ -76,6 +86,33 @@ Open the interactive docs at http://localhost:8000/docs and check the liveness p
 curl http://localhost:8000/health
 # {"status":"ok"}
 ```
+
+### Local environment
+
+| Command | What it does |
+|---|---|
+| `make up` | Starts PostgreSQL (`globant-db` container) and waits for its healthcheck |
+| `make psql` | Opens a `psql` shell in the local database |
+| `make logs` | Follows the database logs |
+| `make down` | Stops the containers; data persists in the `pgdata` volume |
+
+To wipe the local data, run `docker compose down -v`.
+
+### Configuration
+
+Settings are read from environment variables, or from a `.env` file
+(copy [`.env.example`](.env.example)). The same variables are used locally and on AWS.
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | _(unset)_ | Full SQLAlchemy URL; takes precedence over the `DB_*` variables |
+| `DB_HOST` | `localhost` | Database host |
+| `DB_PORT` | `5432` | Database port (also the host port published by Docker Compose) |
+| `DB_NAME` | `globant` | Database name |
+| `DB_USER` | `postgres` | Database user |
+| `DB_PASSWORD` | `postgres` | Database password (local only; AWS uses IAM database authentication) |
+| `APP_ENV` | `local` | One of `local`, `test`, `dev`, `prod` |
+| `LOG_LEVEL` | `INFO` | Logging level |
 
 ## Architecture
 
