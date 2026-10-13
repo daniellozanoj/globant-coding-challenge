@@ -3,13 +3,15 @@
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import batches, ingestions, metrics, uploads
+from app.api import batches, ingestions, internal, metrics, uploads
 from app.api.errors import register_exception_handlers
+from app.config import Settings, get_settings
 
 API_PREFIX = "/api/v1"
 
 
-def create_app() -> FastAPI:
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or get_settings()
     app = FastAPI(
         title="Globant Data Engineering Challenge API",
         version=__version__,
@@ -25,6 +27,8 @@ def create_app() -> FastAPI:
     app.include_router(uploads.router, prefix=API_PREFIX)
     app.include_router(batches.router, prefix=API_PREFIX)
     app.include_router(metrics.router, prefix=API_PREFIX)
+    if settings.enable_event_handlers:
+        app.include_router(internal.router)
     register_exception_handlers(app)
     return app
 

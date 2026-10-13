@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     raw_bucket: str | None = None  # enables direct-to-S3 uploads when set
     upload_url_expiration_seconds: int = Field(default=900, ge=60, le=3600)
+    # Only on the loader Lambda: mounts POST /internal/events, the AWS Lambda Web Adapter
+    # pass-through path for non-HTTP events (SQS messages, migration invocations).
+    enable_event_handlers: bool = False
 
     @property
     def sqlalchemy_url(self) -> str:

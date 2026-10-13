@@ -23,6 +23,7 @@ code and container image target a serverless architecture on **AWS**.
 - [Data quality rules](#data-quality-rules)
   - [Sample data profile](#sample-data-profile)
 - [Ingestion pipeline](#ingestion-pipeline)
+- [Event-driven loader (AWS)](#event-driven-loader-aws)
 - [API reference](#api-reference)
 - [Section 2: SQL metrics](#section-2-sql-metrics)
 - [Assumptions](#assumptions)
@@ -111,7 +112,7 @@ make stack-down
 │   ├── core/          # Ingestion logic: CSV parsing, validation, loading (no HTTP/AWS deps)
 │   ├── db/            # SQLAlchemy models, session, repositories and metrics
 │   │   └── queries/   # Section 2 SQL, as plain .sql files
-│   ├── handlers/      # AWS Lambda entry points (event-driven loader)
+│   ├── handlers/      # Non-HTTP Lambda events: S3/SQS loader, migrations
 │   ├── config.py      # Settings from environment variables
 │   └── main.py        # FastAPI application factory
 ├── data/              # CSV files provided with the challenge (no header)
@@ -186,6 +187,7 @@ Settings are read from environment variables, or from a `.env` file
 | `AWS_REGION` | `us-east-1` | Region for S3 and RDS IAM tokens |
 | `RAW_BUCKET` | _(unset)_ | S3 bucket for direct uploads; enables `POST /api/v1/uploads` |
 | `UPLOAD_URL_EXPIRATION_SECONDS` | `900` | Lifetime of presigned upload URLs |
+| `ENABLE_EVENT_HANDLERS` | `false` | Loader Lambda only: mounts `POST /internal/events` for SQS batches and migration invocations |
 | `APP_ENV` | `local` | One of `local`, `test`, `dev`, `prod` |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
@@ -396,6 +398,38 @@ Other rules:
 
 - A repeated id within a file keeps its **last** occurrence, like successive upserts would.
 - `rows_loaded` counts accepted rows, including repeated ids that overwrite each other.
+
+## Event-driven loader (AWS)
+
+On AWS, files uploaded to `landing/` are loaded asynchronously by the **loader Lambda**, which runs
+the **same container image** as the API. The AWS Lambda Web Adapter forwards non-HTTP events to
+`POST /internal/events` (`AWS_LWA_PASS_THROUGH_PATH`), a route that only exists when
+`ENABLE_EVENT_HANDLERS=true`, so it is never reachable through API Gateway
+([ADR-009](docs/architecture.md#adr-009--one-image-for-every-lambda-non-http-events-through-the-web-adapter)).
+
+```mermaid
+flowchart LR
+    s3[("S3<br/>landing/{table}/{job_id}.csv")] -- "ObjectCreated" --> sqs["SQS"]
+    sqs -- "batch" --> lwa["Lambda Web Adapter"]
+    lwa -- "POST /internal/events" --> handler["handle_sqs_event"]
+    handler -- "stream + load_rows" --> db[("Aurora PostgreSQL")]
+    handler -- "rejected rows" --> rej[("S3<br/>rejected/{table}/{job_id}.csv")]
+    sqs -. "3 failed attempts" .-> dlq["DLQ"]
+```
+
+| Situation | Behavior |
+|---|---|
+| File for a job created by `POST /uploads` | The `PENDING` job is loaded and ends `SUCCEEDED` or `FAILED` |
+| File dropped in `landing/` without a job | A job is created with the id from the key |
+| Duplicate delivery of a succeeded job | Skipped (SQS delivers at least once) |
+| Retry of a failed or interrupted job | Counters and rejections are reset, then the file is loaded again (upserts) |
+| Invalid file (not UTF-8, broken CSV) | Job `FAILED`, message acknowledged: retrying cannot help |
+| Transient error (S3, database) | Only that message is returned in `batchItemFailures` and retried; after 3 attempts it goes to the DLQ |
+| Key outside `landing/{table}/{uuid}.csv`, S3 test events | Ignored |
+| `{"action": "migrate"}` invocation | Runs `alembic upgrade head` inside the VPC with IAM authentication and returns the revision |
+
+Rejected rows are stored in `load_rejections` and mirrored to `rejected/{table}/{job_id}.csv` in
+the bucket for data stewards.
 
 ## API reference
 

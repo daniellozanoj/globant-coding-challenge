@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, pool
 from app.config import get_settings
 from app.db import models  # noqa: F401  (registers the tables on Base.metadata)
 from app.db.base import Base
+from app.db.session import build_engine
 
 config = context.config
 
@@ -34,12 +35,25 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _run(connection) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
+
+
 def run_migrations_online() -> None:
-    engine = create_engine(_database_url(), poolclass=pool.NullPool)
+    # A caller (e.g. the migration Lambda) may hand over an open connection.
+    if (connection := config.attributes.get("connection")) is not None:
+        _run(connection)
+        return
+
+    if url := config.attributes.get("sqlalchemy_url"):
+        engine = create_engine(url, poolclass=pool.NullPool)
+    else:
+        # Same engine as the application, including IAM authentication on AWS.
+        engine = build_engine(get_settings())
     with engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
+        _run(connection)
     engine.dispose()
 
 
