@@ -63,8 +63,10 @@ def add_rejections(session: Session, job_id: uuid.UUID, rows: Sequence[RejectedR
     )
 
 
-def create_ingestion_job(session: Session, table: TableName, source: str) -> IngestionJob:
-    job = IngestionJob(table_name=table, source=source)
+def create_ingestion_job(
+    session: Session, table: TableName, source: str, job_id: uuid.UUID | None = None
+) -> IngestionJob:
+    job = IngestionJob(id=job_id or uuid.uuid4(), table_name=table, source=source)
     session.add(job)
     session.commit()
     return job

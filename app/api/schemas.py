@@ -5,6 +5,8 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict
 
+from app.core.tables import TableName
+
 
 class IngestionJobOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -40,3 +42,16 @@ class RejectionPage(BaseModel):
 class ErrorOut(BaseModel):
     detail: str
     job_id: uuid.UUID | None = None
+
+
+class UploadRequest(BaseModel):
+    table: TableName
+
+
+class UploadTicket(BaseModel):
+    job_id: uuid.UUID
+    upload_url: str
+    method: str = "PUT"
+    headers: dict[str, str]
+    expires_in: int
+    status_url: str

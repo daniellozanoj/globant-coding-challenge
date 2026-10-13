@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import batches, ingestions, metrics
+from app.api import batches, ingestions, metrics, uploads
 from app.api.errors import register_exception_handlers
 
 API_PREFIX = "/api/v1"
@@ -22,6 +22,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(ingestions.router, prefix=API_PREFIX)
+    app.include_router(uploads.router, prefix=API_PREFIX)
     app.include_router(batches.router, prefix=API_PREFIX)
     app.include_router(metrics.router, prefix=API_PREFIX)
     register_exception_handlers(app)
