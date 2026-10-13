@@ -12,8 +12,8 @@ code and container image target a serverless architecture on **AWS**.
 - [Tech stack](#tech-stack)
 - [Repository structure](#repository-structure)
 - [Getting started](#getting-started)
+- [Architecture](#architecture)
 - [Development workflow](#development-workflow)
-- Architecture _(coming soon)_
 - Data model _(coming soon)_
 - API reference _(coming soon)_
 - Data quality rules _(coming soon)_
@@ -76,6 +76,35 @@ Open the interactive docs at http://localhost:8000/docs and check the liveness p
 curl http://localhost:8000/health
 # {"status":"ok"}
 ```
+
+## Architecture
+
+The API runs locally with Docker and targets a **serverless, pay-per-use architecture on AWS**,
+chosen because a data migration is a sporadic, bursty workload with long idle periods.
+
+```mermaid
+flowchart LR
+    client["Client"] -- "HTTPS + JWT" --> apigw["API Gateway<br/>HTTP API"]
+    apigw --> apiFn["Lambda: api<br/>(FastAPI)"]
+    client -- "PUT CSV<br/>(presigned URL)" --> s3[("S3<br/>landing/")]
+    s3 -- "ObjectCreated" --> sqs["SQS + DLQ"]
+    sqs --> loaderFn["Lambda: loader"]
+    apiFn --> aurora[("Aurora PostgreSQL<br/>Serverless v2")]
+    loaderFn --> aurora
+```
+
+| Concern | Decision |
+|---|---|
+| Compute | AWS Lambda (arm64, container image) behind API Gateway HTTP API |
+| CSV ingestion | Direct upload to S3 with presigned URLs → SQS → loader Lambda |
+| Database | Aurora PostgreSQL Serverless v2 (scales to zero) |
+| Networking | Private subnets, no NAT Gateway, IAM database authentication |
+| Authentication | Amazon Cognito JWT authorizer at API Gateway |
+| Infrastructure as code | Terraform |
+
+Idle cost is estimated at **~1–3 USD/month**, versus ~70–80 USD/month for an always-on container
+stack. Full details, data flows, cost model and architecture decision records (ADRs):
+**[docs/architecture.md](docs/architecture.md)**.
 
 ## Development workflow
 
