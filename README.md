@@ -16,9 +16,10 @@ code and container image target a serverless architecture on **AWS**.
   - [Configuration](#configuration)
 - [Architecture](#architecture)
 - [Data model](#data-model)
+- [Data quality rules](#data-quality-rules)
+  - [Sample data profile](#sample-data-profile)
 - [Development workflow](#development-workflow)
 - API reference _(coming soon)_
-- Data quality rules _(coming soon)_
 - Assumptions _(coming soon)_
 
 ## Challenge scope
@@ -59,6 +60,7 @@ code and container image target a serverless architecture on **AWS**.
 │   ├── handlers/      # AWS Lambda entry points (event-driven loader)
 │   ├── config.py      # Settings from environment variables
 │   └── main.py        # FastAPI application factory
+├── data/              # CSV files provided with the challenge (no header)
 ├── docs/              # Architecture and design decisions
 ├── migrations/        # Alembic environment and versioned migrations
 ├── tests/
@@ -224,6 +226,42 @@ uv run alembic downgrade -1          # roll back the last migration
 ```
 
 An integration test fails if the models and the migrations drift apart.
+
+## Data quality rules
+
+Every CSV row and every batch record is validated with the same Pydantic schemas
+([`app/core/schemas.py`](app/core/schemas.py)). Valid rows are loaded; invalid rows are **kept with
+their errors** in `load_rejections` instead of being silently dropped
+([ADR-004](docs/architecture.md#adr-004--invalid-rows-are-quarantined-not-dropped)).
+
+| Rule | Applies to | Rejected example |
+|---|---|---|
+| Exact number of columns (2 or 5) | all tables | `1,Sales,extra` |
+| Required fields cannot be empty | all fields | `157,Kellia Barribal,,4,61` → `datetime: Field required` |
+| Ids are positive integers | `id`, `department_id`, `job_id` | `abc`, `0`, `-1`, `1.5` |
+| ISO 8601 datetime **with timezone**, normalized to UTC | `datetime` | `2021-07-27T16:02:08` (no timezone), `1627401728` |
+| Text is trimmed and must have 1 to 255 characters | `department`, `job`, `name` | `"   "` |
+| No unknown fields | batch payloads | `{"id": 1, "job": "x", "salary": 10}` |
+| Referenced department and job must exist | `hired_employees` | checked against the database at load time |
+
+File handling: files are read as a stream (constant memory), CSV quoting is honored (values may
+contain commas), and CRLF line endings, a UTF-8 BOM, blank lines and an optional header row are
+supported. Errors keep the physical line number of the file.
+
+### Sample data profile
+
+Profile of the files in [`data/`](data/), verified by
+[`tests/unit/test_sample_data.py`](tests/unit/test_sample_data.py):
+
+| File | Rows | Valid | Rejected |
+|---|---|---|---|
+| `departments.csv` | 12 | 12 | 0 |
+| `jobs.csv` | 183 | 183 | 0 |
+| `hired_employees.csv` | 1,999 | 1,929 | **70** |
+
+The 70 rejected employees each miss exactly one field: `department_id` (21), `name` (19),
+`job_id` (16) and `datetime` (14). All valid rows reference existing departments and jobs, and
+there are no duplicated ids.
 
 ## Development workflow
 
