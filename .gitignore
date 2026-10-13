@@ -225,6 +225,7 @@ __marimo__/
 
 # Terraform
 .terraform/
+.tflint.d/
 *.tfstate
 *.tfstate.*
 *.tfvars

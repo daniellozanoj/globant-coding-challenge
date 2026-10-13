@@ -1,0 +1,8 @@
+aws_region  = "us-east-1"
+environment = "dev"
+
+# Production-like settings:
+# db_min_capacity     = 0.5
+# db_instance_count   = 2
+# deletion_protection = true
+# force_destroy_bucket = false
