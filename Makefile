@@ -1,4 +1,4 @@
-.PHONY: install lint format test run up down logs psql
+.PHONY: install lint format test test-unit test-integration run up down logs psql migrate revision
 
 install: ## Install runtime and dev dependencies
 	uv sync
@@ -11,8 +11,14 @@ format: ## Auto-format the code
 	uv run ruff check --fix .
 	uv run ruff format .
 
-test: ## Run the test suite
+test: ## Run the whole test suite (integration tests start a PostgreSQL container)
 	uv run pytest
+
+test-unit: ## Run only the fast unit tests
+	uv run pytest -m "not integration"
+
+test-integration: ## Run only the integration tests
+	uv run pytest -m integration
 
 run: ## Run the API locally with auto-reload
 	uv run uvicorn app.main:app --reload --port 8000
@@ -28,3 +34,9 @@ logs: ## Follow local infrastructure logs
 
 psql: ## Open a psql shell in the local database
 	docker compose exec db psql -U postgres -d globant
+
+migrate: ## Apply database migrations to the configured database
+	uv run alembic upgrade head
+
+revision: ## Autogenerate a migration from model changes: make revision m="describe change"
+	uv run alembic revision --autogenerate -m "$(m)"
