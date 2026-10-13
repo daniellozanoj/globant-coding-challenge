@@ -3,7 +3,7 @@
 import csv
 import io
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import BinaryIO, TextIO
 
 from pydantic import ValidationError
@@ -16,6 +16,8 @@ from app.core.tables import TableSpec
 class ValidRow:
     line_number: int
     record: Record
+    # Original values, kept in case a later check (e.g. foreign keys) rejects the row.
+    raw: list[str] = field(default_factory=list, compare=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +65,7 @@ def parse_row(spec: TableSpec, values: list[str], line_number: int) -> ParsedRow
         if value.strip()
     }
     try:
-        return ValidRow(line_number, spec.record_type.model_validate(data))
+        return ValidRow(line_number, spec.record_type.model_validate(data), values)
     except ValidationError as exc:
         return RejectedRow(line_number, values, format_errors(exc))
 
