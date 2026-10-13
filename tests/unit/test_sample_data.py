@@ -1,14 +1,12 @@
 """Profiles the CSV files provided with the challenge (data/)."""
 
 from collections import Counter
-from pathlib import Path
 
 import pytest
 
 from app.core.csv_reader import RejectedRow, ValidRow, read_rows
 from app.core.tables import TABLES, TableName
-
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+from tests.support import DATA_DIR
 
 
 def load(table: TableName) -> list:

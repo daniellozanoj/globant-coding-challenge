@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 
+from app import __version__
 from app.api import batches, ingestions
 from app.api.errors import register_exception_handlers
 
@@ -11,7 +12,7 @@ API_PREFIX = "/api/v1"
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Globant Data Engineering Challenge API",
-        version="0.1.0",
+        version=__version__,
         description="Migrates historical CSV data into a SQL database and exposes batch inserts.",
     )
 

@@ -1,6 +1,6 @@
 [project]
 name = "globant-data-challenge"
-version = "0.1.0"
+version = "1.0.0"
 description = "REST API to migrate historical CSV data (departments, jobs, hired employees) into a SQL database."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -38,3 +38,11 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 testpaths = ["tests"]
 addopts = "-ra"
 markers = ["integration: tests that need a PostgreSQL database"]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

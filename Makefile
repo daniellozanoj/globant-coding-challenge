@@ -1,4 +1,4 @@
-.PHONY: install lint format test test-unit test-integration run up down logs psql migrate revision image stack stack-down
+.PHONY: install lint format test test-unit test-integration coverage run up down logs psql migrate revision image stack stack-down
 
 install: ## Install runtime and dev dependencies
 	uv sync
@@ -19,6 +19,9 @@ test-unit: ## Run only the fast unit tests
 
 test-integration: ## Run only the integration tests
 	uv run pytest -m integration
+
+coverage: ## Run the whole suite with a coverage report
+	uv run pytest --cov --cov-report=term-missing
 
 run: ## Run the API locally with auto-reload
 	uv run uvicorn app.main:app --reload --port 8000
