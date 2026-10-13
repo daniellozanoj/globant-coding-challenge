@@ -450,7 +450,13 @@ make tf-lint       # tflint with the AWS ruleset
 | `database.tf` | Aurora PostgreSQL 16 Serverless v2 (0 to 4 ACU, auto-pause), IAM authentication, RDS-managed master secret, encryption, Data API for bootstrap |
 | `storage.tf` | Raw bucket: public access blocked, SSE-S3, versioning, TLS-only policy, lifecycle (`landing/` to Standard-IA), `landing/*.csv` notifications to SQS |
 | `queue.tf` | Loader queue (visibility timeout 6x the loader timeout) with a DLQ after 3 attempts, SSE, least-privilege queue policy |
-| `variables.tf` | Sizing and safety knobs with dev defaults (e.g. `db_min_capacity`, `deletion_protection`) |
+| `ecr.tf` | Repository with immutable tags, scan on push and a 10-image lifecycle; pull policy for this project's Lambdas only |
+| `iam.tf` | One least-privilege role per Lambda: `rds-db:connect` for a single database user, S3 by prefix (`landing/` vs `rejected/`), the loader queue only |
+| `lambda.tf` | `api` and `loader` functions from the same arm64 image, in the private subnets, with IAM database auth and `DB_POOL_SIZE=1`; SQS event source with partial batch responses and capped concurrency |
+| `api_gateway.tf` | HTTP API with a Cognito JWT authorizer on `ANY /{proxy+}`; `/health`, `/docs` and `/openapi.json` are public; throttling and JSON access logs |
+| `cognito.tf` | User pool (admin-created users only, strong password policy) and the app client whose tokens the API accepts |
+| `observability.tf` | SNS alarms topic (optional email) and alarms on DLQ messages, Lambda errors and API 5xx |
+| `variables.tf` | Sizing and safety knobs with dev defaults (e.g. `db_min_capacity`, `deletion_protection`, `api_reserved_concurrency`) |
 
 Provider versions are pinned in `.terraform.lock.hcl` for Linux and macOS (x86 and arm).
 State goes to S3 with native locking ([`backend.tf.example`](infra/terraform/backend.tf.example)).
