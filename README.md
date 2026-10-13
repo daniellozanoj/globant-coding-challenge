@@ -107,6 +107,7 @@ make stack-down
 ├── .github/workflows/ # CI pipeline
 ├── app/
 │   ├── api/           # HTTP layer (FastAPI routers)
+│   ├── aws/           # AWS adapters (S3)
 │   ├── core/          # Ingestion logic: CSV parsing, validation, loading (no HTTP/AWS deps)
 │   ├── db/            # SQLAlchemy models, session, repositories and metrics
 │   │   └── queries/   # Section 2 SQL, as plain .sql files
@@ -178,8 +179,13 @@ Settings are read from environment variables, or from a `.env` file
 | `DB_NAME` | `globant` | Database name |
 | `DB_USER` | `postgres` | Database user |
 | `DB_PASSWORD` | `postgres` | Database password (local only; AWS uses IAM database authentication) |
+| `DB_POOL_SIZE` | `5` | Connections kept per process (1 on AWS Lambda) |
+| `DB_IAM_AUTH` | `false` | Authenticate with short-lived RDS IAM tokens over TLS instead of `DB_PASSWORD` (AWS) |
 | `LOCAL_DATA_DIR` | `data` | Server directory read by the historical migration endpoint |
 | `MAX_UPLOAD_MB` | `50` | Maximum size of an uploaded CSV file |
+| `AWS_REGION` | `us-east-1` | Region for S3 and RDS IAM tokens |
+| `RAW_BUCKET` | _(unset)_ | S3 bucket for direct uploads; enables `POST /api/v1/uploads` |
+| `UPLOAD_URL_EXPIRATION_SECONDS` | `900` | Lifetime of presigned upload URLs |
 | `APP_ENV` | `local` | One of `local`, `test`, `dev`, `prod` |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
@@ -400,6 +406,7 @@ Interactive OpenAPI documentation is served at http://localhost:8000/docs.
 | `GET` | `/health` | Liveness probe |
 | `POST` | `/api/v1/ingestions/historical` | Migrate the three CSV files from `LOCAL_DATA_DIR`, in dependency order |
 | `POST` | `/api/v1/ingestions/{table}` | Upload a CSV file and load it into `departments`, `jobs` or `hired_employees` |
+| `POST` | `/api/v1/uploads` | Presigned URL to upload a CSV directly to S3 (AWS; requires `RAW_BUCKET`) |
 | `GET` | `/api/v1/ingestions/{job_id}` | Status and counters of an ingestion job |
 | `GET` | `/api/v1/ingestions/{job_id}/rejections` | Rows rejected by a job, paginated |
 | `POST` | `/api/v1/departments/batch` | Insert or update 1 to 1000 departments in one transaction |
@@ -447,6 +454,36 @@ curl -X POST http://localhost:8000/api/v1/ingestions/hired_employees \
 
 - Add `?has_header=true` when the file starts with a header row.
 - The response includes a `Location` header pointing to the job.
+
+### Direct upload to S3 (AWS)
+
+On AWS, large files skip the API entirely: the client asks for a presigned URL, uploads the file
+to S3 and polls the job, which the event-driven loader processes asynchronously
+([ADR-003](docs/architecture.md#adr-003--direct-to-s3-uploads-with-presigned-urls-and-an-sqs-triggered-loader)).
+
+```bash
+curl -X POST https://<api>/api/v1/uploads -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" -d '{"table": "hired_employees"}'
+```
+
+```json
+{
+  "job_id": "0ee81f35-1699-4644-aca9-21d7e0556d82",
+  "upload_url": "https://<bucket>.s3.amazonaws.com/landing/hired_employees/0ee81f35-....csv?X-Amz-Signature=...",
+  "method": "PUT",
+  "headers": {"Content-Type": "text/csv"},
+  "expires_in": 900,
+  "status_url": "https://<api>/api/v1/ingestions/0ee81f35-1699-4644-aca9-21d7e0556d82"
+}
+```
+
+```bash
+curl -X PUT "<upload_url>" -H "Content-Type: text/csv" --data-binary @data/hired_employees.csv
+curl "<status_url>" -H "Authorization: Bearer <token>"   # PENDING -> RUNNING -> SUCCEEDED
+```
+
+The object key `landing/{table}/{job_id}.csv` carries the job id, so the loader knows which job
+the file belongs to. Without `RAW_BUCKET` the endpoint answers `503`.
 
 ### Inspect a job and its rejections
 
@@ -537,6 +574,7 @@ after a timeout, and batches behave like the CSV migration.
 | `415` | The uploaded file is not a `.csv` |
 | `422` | Unknown table name, invalid parameters, or invalid batch rows (nothing written) |
 | `500` | Unexpected failure. The job is marked `FAILED`, and the load can be safely retried |
+| `503` | Direct uploads requested but `RAW_BUCKET` is not configured |
 
 ## Section 2: SQL metrics
 

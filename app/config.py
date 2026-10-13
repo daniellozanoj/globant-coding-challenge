@@ -22,10 +22,18 @@ class Settings(BaseSettings):
     db_name: str = "globant"
     db_user: str = "postgres"
     db_password: str = "postgres"
+    # On AWS, Lambdas authenticate with short-lived IAM tokens instead of a password.
+    db_iam_auth: bool = False
+    db_pool_size: int = Field(default=5, ge=1)
 
     # Ingestion
     local_data_dir: Path = Path("data")
     max_upload_mb: int = Field(default=50, ge=1)
+
+    # AWS
+    aws_region: str = "us-east-1"
+    raw_bucket: str | None = None  # enables direct-to-S3 uploads when set
+    upload_url_expiration_seconds: int = Field(default=900, ge=60, le=3600)
 
     @property
     def sqlalchemy_url(self) -> str:
