@@ -24,3 +24,7 @@ def year_bounds(year: int) -> dict[str, dt.datetime]:
 
 def hires_by_quarter(session: Session, year: int) -> Sequence[RowMapping]:
     return session.execute(_query("hires_by_quarter"), year_bounds(year)).mappings().all()
+
+
+def departments_above_mean(session: Session, year: int) -> Sequence[RowMapping]:
+    return session.execute(_query("departments_above_mean"), year_bounds(year)).mappings().all()
