@@ -156,7 +156,7 @@ sequenceDiagram
 | API entry point | API Gateway **HTTP API** | JWT authorizer (Cognito), stage throttling |
 | Authentication | Amazon Cognito user pool | Client credentials / user tokens validated at the edge |
 | API compute | AWS Lambda (container image, arm64) | FastAPI via AWS Lambda Web Adapter, reserved concurrency |
-| Loader compute | AWS Lambda (same image, arm64) | Triggered by SQS, maximum concurrency on the event source |
+| Loader compute | AWS Lambda (same image, arm64) | Triggered by SQS; the Web Adapter forwards batches to `POST /internal/events`; maximum concurrency on the event source; also runs migrations on `{"action": "migrate"}` |
 | Raw storage | Amazon S3 | Private, SSE-S3, versioning, lifecycle rules on `landing/` |
 | Buffering | Amazon SQS + DLQ | Visibility timeout > loader timeout, redrive after N attempts |
 | Database | Aurora PostgreSQL Serverless v2 | Min 0 ACU (auto-pause) for dev, min 0.5 ACU for prod |
@@ -315,6 +315,21 @@ AWS loader Lambda.
 - **Decision:** Terraform with remote state in S3.
 - **Alternatives:** AWS SAM / CDK (more serverless-native, AWS-only).
 - **Consequences:** cloud-agnostic tooling widely used in the industry; a plan is reviewable in PRs.
+
+### ADR-009 — One image for every Lambda, non-HTTP events through the Web Adapter
+
+- **Context:** the API, the loader and the migrations need the same code, settings and database
+  access; maintaining several packages or handler runtimes adds drift.
+- **Decision:** a single container image. The AWS Lambda Web Adapter serves HTTP requests from API
+  Gateway and forwards non-HTTP events (SQS batches, direct invocations) to
+  `POST /internal/events`. That route is mounted only when `ENABLE_EVENT_HANDLERS=true`, which is
+  set only on the loader function.
+- **Alternatives:** separate zip packages with native Lambda handlers (more artifacts to build and
+  version); the AWS Lambda runtime interface client next to the adapter (both would poll the
+  runtime API).
+- **Consequences:** one artifact to build, scan and deploy; the loader logic is a plain function
+  (`app/handlers/`) tested without Lambda. Migrations run inside the VPC with IAM authentication,
+  invoked once per deployment.
 
 ## Future evolution
 

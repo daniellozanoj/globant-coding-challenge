@@ -3,7 +3,7 @@
 import uuid
 from collections.abc import Iterable, Sequence
 
-from sqlalchemy import insert, select
+from sqlalchemy import delete, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -11,7 +11,14 @@ from app.core.csv_reader import RejectedRow
 from app.core.schemas import Record
 from app.core.tables import TableName
 from app.db.base import Base
-from app.db.models import Department, HiredEmployee, IngestionJob, Job, LoadRejection
+from app.db.models import (
+    Department,
+    HiredEmployee,
+    IngestionJob,
+    IngestionStatus,
+    Job,
+    LoadRejection,
+)
 
 MODELS: dict[TableName, type[Base]] = {
     TableName.DEPARTMENTS: Department,
@@ -70,3 +77,21 @@ def create_ingestion_job(
     session.add(job)
     session.commit()
     return job
+
+
+def reset_ingestion_job(session: Session, job: IngestionJob) -> None:
+    """Prepare a job to be processed again: counters, error and rejections start from scratch."""
+    session.execute(delete(LoadRejection).where(LoadRejection.job_id == job.id))
+    job.status = IngestionStatus.PENDING
+    job.rows_read = job.rows_loaded = job.rows_rejected = 0
+    job.error = None
+    job.started_at = job.finished_at = None
+    session.commit()
+
+
+def list_rejections(session: Session, job_id: uuid.UUID) -> Sequence[LoadRejection]:
+    return session.scalars(
+        select(LoadRejection)
+        .where(LoadRejection.job_id == job_id)
+        .order_by(LoadRejection.line_number)
+    ).all()
