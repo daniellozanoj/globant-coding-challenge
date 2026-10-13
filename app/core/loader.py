@@ -2,6 +2,7 @@
 
 import datetime as dt
 import logging
+import uuid
 from collections.abc import Iterable, Sequence
 from itertools import batched
 
@@ -16,6 +17,14 @@ from app.db.models import IngestionJob, IngestionStatus
 logger = logging.getLogger(__name__)
 
 DEFAULT_CHUNK_SIZE = 1000
+
+
+class IngestionError(Exception):
+    """A load failed; the job is already marked FAILED. The original error is the __cause__."""
+
+    def __init__(self, job_id: uuid.UUID, message: str) -> None:
+        super().__init__(message)
+        self.job_id = job_id
 
 
 def load_csv(
@@ -44,6 +53,9 @@ def load_rows(
 
     Committing per chunk keeps transactions short and memory constant. A failed load can simply
     be retried: writes are upserts, so already committed chunks are not duplicated.
+
+    Raises:
+        IngestionError: the load failed and the job was marked FAILED.
     """
     table = TableName(job.table_name)
     job.status = IngestionStatus.RUNNING
@@ -61,7 +73,7 @@ def load_rows(
         job.finished_at = _now()
         session.commit()
         logger.exception("Ingestion job %s failed", job.id)
-        raise
+        raise IngestionError(job.id, job.error) from exc
 
     job.status = IngestionStatus.SUCCEEDED
     job.finished_at = _now()

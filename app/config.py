@@ -1,6 +1,7 @@
 """Application settings loaded from environment variables (and an optional .env file)."""
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 from urllib.parse import quote_plus
 
@@ -21,6 +22,10 @@ class Settings(BaseSettings):
     db_name: str = "globant"
     db_user: str = "postgres"
     db_password: str = "postgres"
+
+    # Ingestion
+    local_data_dir: Path = Path("data")
+    max_upload_mb: int = Field(default=50, ge=1)
 
     @property
     def sqlalchemy_url(self) -> str:

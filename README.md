@@ -19,16 +19,16 @@ code and container image target a serverless architecture on **AWS**.
 - [Data quality rules](#data-quality-rules)
   - [Sample data profile](#sample-data-profile)
 - [Ingestion pipeline](#ingestion-pipeline)
+- [API reference](#api-reference)
 - [Development workflow](#development-workflow)
-- API reference _(coming soon)_
 - Assumptions _(coming soon)_
 
 ## Challenge scope
 
 | Section | Deliverable | Status |
 |---|---|---|
-| 1. API | Receive historical data from CSV files | ⏳ In progress |
-| 1. API | Upload the files to the new SQL database | ⏳ In progress |
+| 1. API | Receive historical data from CSV files | ✅ Done |
+| 1. API | Upload the files to the new SQL database | ✅ Done |
 | 1. API | Insert batch transactions (1 to 1000 rows) in one request | ⏳ In progress |
 | 2. SQL | Hires per job and department in 2021 by quarter | 🔜 Pending |
 | 2. SQL | Departments that hired above the 2021 mean | 🔜 Pending |
@@ -88,6 +88,12 @@ make migrate   # create the schema (alembic upgrade head)
 make run       # start the API on http://localhost:8000
 ```
 
+Migrate the historical CSV files in [`data/`](data/) with one request:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/ingestions/historical
+```
+
 Open the interactive docs at http://localhost:8000/docs and check the liveness probe:
 
 ```bash
@@ -119,6 +125,8 @@ Settings are read from environment variables, or from a `.env` file
 | `DB_NAME` | `globant` | Database name |
 | `DB_USER` | `postgres` | Database user |
 | `DB_PASSWORD` | `postgres` | Database password (local only; AWS uses IAM database authentication) |
+| `LOCAL_DATA_DIR` | `data` | Server directory read by the historical migration endpoint |
+| `MAX_UPLOAD_MB` | `50` | Maximum size of an uploaded CSV file |
 | `APP_ENV` | `local` | One of `local`, `test`, `dev`, `prod` |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
@@ -299,6 +307,96 @@ Other rules:
 
 - A repeated id within a file keeps its **last** occurrence, like successive upserts would.
 - `rows_loaded` counts accepted rows, including repeated ids that overwrite each other.
+
+## API reference
+
+Interactive OpenAPI documentation is served at http://localhost:8000/docs.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Liveness probe |
+| `POST` | `/api/v1/ingestions/historical` | Migrate the three CSV files from `LOCAL_DATA_DIR`, in dependency order |
+| `POST` | `/api/v1/ingestions/{table}` | Upload a CSV file and load it into `departments`, `jobs` or `hired_employees` |
+| `GET` | `/api/v1/ingestions/{job_id}` | Status and counters of an ingestion job |
+| `GET` | `/api/v1/ingestions/{job_id}/rejections` | Rows rejected by a job, paginated |
+
+Loads run synchronously in the local API. On AWS the same loader runs asynchronously behind
+S3 and SQS ([ADR-003](docs/architecture.md#adr-003--direct-to-s3-uploads-with-presigned-urls-and-an-sqs-triggered-loader)).
+
+### Migrate the historical files
+
+The files are read from `LOCAL_DATA_DIR` on the server. The directory comes from configuration,
+never from the request, so clients cannot read arbitrary paths.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/ingestions/historical
+```
+
+Returns `201` with one job per table. Returns `404` before loading anything if a file is missing.
+
+### Upload a CSV file
+
+```bash
+curl -X POST http://localhost:8000/api/v1/ingestions/hired_employees \
+  -F "file=@data/hired_employees.csv"
+```
+
+```json
+{
+  "id": "0ee81f35-1699-4644-aca9-21d7e0556d82",
+  "table_name": "hired_employees",
+  "source": "upload:hired_employees.csv",
+  "status": "SUCCEEDED",
+  "rows_read": 1999,
+  "rows_loaded": 1929,
+  "rows_rejected": 70,
+  "error": null,
+  "created_at": "2026-10-13T00:47:02.104Z",
+  "started_at": "2026-10-13T00:47:02.110Z",
+  "finished_at": "2026-10-13T00:47:02.391Z"
+}
+```
+
+- Add `?has_header=true` when the file starts with a header row.
+- The response includes a `Location` header pointing to the job.
+
+### Inspect a job and its rejections
+
+```bash
+curl http://localhost:8000/api/v1/ingestions/<job_id>
+curl "http://localhost:8000/api/v1/ingestions/<job_id>/rejections?limit=2&offset=0"
+```
+
+```json
+{
+  "items": [
+    {
+      "line_number": 2,
+      "raw_record": ["2", "Ty Hofer", "2021-05-30T05:43:46Z", "8", ""],
+      "errors": ["job_id: Field required"]
+    },
+    {
+      "line_number": 67,
+      "raw_record": ["67", "Thia Morican", "2021-03-10T19:27:10Z", "", "104"],
+      "errors": ["department_id: Field required"]
+    }
+  ],
+  "total": 70,
+  "limit": 2,
+  "offset": 0
+}
+```
+
+### Errors
+
+| Status | When |
+|---|---|
+| `400` | The file is not a UTF-8 CSV. The job is marked `FAILED`; the body includes its `job_id` |
+| `404` | Unknown job, or a historical file is missing |
+| `413` | The upload exceeds `MAX_UPLOAD_MB` |
+| `415` | The uploaded file is not a `.csv` |
+| `422` | Unknown table name or invalid parameters |
+| `500` | Unexpected failure. The job is marked `FAILED`, and the load can be safely retried |
 
 ## Development workflow
 

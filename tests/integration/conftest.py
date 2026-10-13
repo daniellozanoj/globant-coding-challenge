@@ -12,10 +12,16 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.config import Settings, get_settings
+from app.db.session import get_session
+from app.main import create_app
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = PROJECT_ROOT / "data"
 
 
 def _configure_docker_host() -> None:
@@ -89,3 +95,23 @@ def session_factory(engine: Engine) -> Iterator[sessionmaker[Session]]:
 def session(session_factory: sessionmaker[Session]) -> Iterator[Session]:
     with session_factory() as session:
         yield session
+
+
+@pytest.fixture
+def settings() -> Settings:
+    return Settings(_env_file=None, local_data_dir=DATA_DIR, max_upload_mb=1)
+
+
+@pytest.fixture
+def client(session_factory: sessionmaker[Session], settings: Settings) -> Iterator[TestClient]:
+    """API client wired to the test database and settings."""
+    app = create_app()
+
+    def _session() -> Iterator[Session]:
+        with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[get_settings] = lambda: settings
+    with TestClient(app) as test_client:
+        yield test_client
