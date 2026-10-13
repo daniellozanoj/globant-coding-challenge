@@ -116,3 +116,74 @@ variable "loader_max_receive_count" {
   type        = number
   default     = 3
 }
+
+# --- Compute ---
+
+variable "image_tag" {
+  description = "Tag of the API image in ECR (immutable tags, e.g. the git commit SHA)."
+  type        = string
+}
+
+variable "db_iam_user" {
+  description = "Database user the Lambdas connect as, with IAM authentication."
+  type        = string
+  default     = "app_iam"
+}
+
+variable "api_memory_mb" {
+  description = "Memory of the API Lambda (CPU scales with it)."
+  type        = number
+  default     = 1024
+}
+
+variable "loader_memory_mb" {
+  description = "Memory of the loader Lambda."
+  type        = number
+  default     = 2048
+}
+
+variable "api_reserved_concurrency" {
+  description = "Reserved concurrency of the API Lambda, capping database connections. -1 = unreserved (new accounts have a low concurrency quota); set e.g. 20 in prod."
+  type        = number
+  default     = -1
+}
+
+variable "loader_max_concurrency" {
+  description = "Maximum concurrent loader invocations from SQS (2 to 1000)."
+  type        = number
+  default     = 5
+}
+
+variable "ecr_force_delete" {
+  description = "Allow `terraform destroy` to delete the ECR repository with its images (dev only)."
+  type        = bool
+  default     = true
+}
+
+# --- API ---
+
+variable "api_throttling_rate_limit" {
+  description = "Steady-state requests per second allowed by API Gateway."
+  type        = number
+  default     = 25
+}
+
+variable "api_throttling_burst_limit" {
+  description = "Request burst allowed by API Gateway."
+  type        = number
+  default     = 50
+}
+
+# --- Observability ---
+
+variable "log_retention_days" {
+  description = "CloudWatch Logs retention."
+  type        = number
+  default     = 14
+}
+
+variable "alarm_email" {
+  description = "Email subscribed to the alarms topic (empty: no subscription)."
+  type        = string
+  default     = ""
+}
