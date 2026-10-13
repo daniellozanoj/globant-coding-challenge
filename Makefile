@@ -1,4 +1,4 @@
-.PHONY: install lint format test test-unit test-integration run up down logs psql migrate revision
+.PHONY: install lint format test test-unit test-integration run up down logs psql migrate revision image stack stack-down
 
 install: ## Install runtime and dev dependencies
 	uv sync
@@ -26,8 +26,8 @@ run: ## Run the API locally with auto-reload
 up: ## Start local infrastructure (PostgreSQL) and wait until healthy
 	docker compose up -d --wait
 
-down: ## Stop local infrastructure (data is kept in the pgdata volume)
-	docker compose down
+down: ## Stop every container (data is kept in the pgdata volume)
+	docker compose --profile app down
 
 logs: ## Follow local infrastructure logs
 	docker compose logs -f
@@ -40,3 +40,12 @@ migrate: ## Apply database migrations to the configured database
 
 revision: ## Autogenerate a migration from model changes: make revision m="describe change"
 	uv run alembic revision --autogenerate -m "$(m)"
+
+image: ## Build the API container image
+	docker build -t globant-challenge-api:local .
+
+stack: ## Run the containerized stack: PostgreSQL -> migrations -> API on :8000
+	docker compose --profile app up -d --build --wait
+
+stack-down: ## Stop the containerized stack
+	docker compose --profile app down

@@ -14,6 +14,7 @@ code and container image target a serverless architecture on **AWS**.
 - [Getting started](#getting-started)
   - [Local environment](#local-environment)
   - [Configuration](#configuration)
+  - [Run with Docker](#run-with-docker)
 - [Architecture](#architecture)
 - [Data model](#data-model)
 - [Data quality rules](#data-quality-rules)
@@ -32,7 +33,9 @@ code and container image target a serverless architecture on **AWS**.
 | 1. API | Insert batch transactions (1 to 1000 rows) in one request | ✅ Done |
 | 2. SQL | Hires per job and department in 2021 by quarter | 🔜 Pending |
 | 2. SQL | Departments that hired above the 2021 mean | 🔜 Pending |
-| Bonus | Cloud hosting (AWS), automated tests, containers | 🔜 Pending |
+| Bonus | Automated tests | ✅ Done (unit + integration) |
+| Bonus | Containerize the application (Dockerfile) | ✅ Done |
+| Bonus | Cloud hosting (AWS) | 🔜 Pending |
 
 ## Tech stack
 
@@ -45,7 +48,7 @@ code and container image target a serverless architecture on **AWS**.
 | Schema migrations | Alembic | Versioned, reviewable schema changes |
 | Configuration | pydantic-settings | Typed settings from environment variables, same config locally and on AWS |
 | Database | PostgreSQL (Aurora PostgreSQL Serverless v2 on AWS) | Transactional workload, native upsert (`ON CONFLICT`), rich analytical SQL |
-| Local infrastructure | Docker Compose | PostgreSQL 16 with healthcheck, matching the Aurora major version |
+| Containers | Docker (multi-stage) + Docker Compose | One image for local and AWS Lambda; PostgreSQL 16 matches the Aurora major version |
 | Package manager | [uv](https://docs.astral.sh/uv/) | Fast, reproducible installs with a lockfile |
 | Lint / format | Ruff | Single fast tool for linting and formatting |
 | Tests | pytest + testcontainers | Unit tests plus integration tests against a real PostgreSQL |
@@ -68,8 +71,9 @@ code and container image target a serverless architecture on **AWS**.
 │   ├── unit/          # Fast tests, no external services
 │   └── integration/   # Tests against a real PostgreSQL
 ├── .env.example       # Configuration template
+├── Dockerfile         # Multi-stage API image (local + AWS Lambda)
 ├── alembic.ini        # Alembic configuration (URL comes from settings)
-├── docker-compose.yml # Local PostgreSQL
+├── docker-compose.yml # PostgreSQL, migrations job and containerized API
 ├── Makefile           # Common developer commands
 └── pyproject.toml     # Dependencies and tool configuration
 ```
@@ -108,7 +112,7 @@ curl http://localhost:8000/health
 | `make up` | Starts PostgreSQL (`globant-db` container) and waits for its healthcheck |
 | `make psql` | Opens a `psql` shell in the local database |
 | `make logs` | Follows the database logs |
-| `make down` | Stops the containers; data persists in the `pgdata` volume |
+| `make down` | Stops every container; data persists in the `pgdata` volume |
 
 To wipe the local data, run `docker compose down -v`.
 
@@ -129,6 +133,36 @@ Settings are read from environment variables, or from a `.env` file
 | `MAX_UPLOAD_MB` | `50` | Maximum size of an uploaded CSV file |
 | `APP_ENV` | `local` | One of `local`, `test`, `dev`, `prod` |
 | `LOG_LEVEL` | `INFO` | Logging level |
+
+### Run with Docker
+
+Run exactly what gets deployed: the API image, with migrations applied by a one-off job.
+
+```bash
+make stack       # PostgreSQL -> migrate job -> API on http://localhost:8000
+curl -X POST http://localhost:8000/api/v1/ingestions/historical
+make stack-down
+```
+
+```mermaid
+flowchart LR
+    db[("db<br/>PostgreSQL 16")] -- "healthy" --> migrate["migrate<br/>alembic upgrade head"]
+    migrate -- "completed successfully" --> api["api<br/>uvicorn :8000"]
+    data[/"./data (read-only)"/] -.-> api
+```
+
+| Image feature | Why |
+|---|---|
+| Multi-stage build with `uv sync --frozen --no-dev` | Reproducible, production-only dependencies; build tools stay out of the runtime image |
+| Dependencies installed before the code is copied | The dependency layer is cached until `pyproject.toml` or `uv.lock` change |
+| Non-root user (`uid 10001`) | Least privilege inside the container |
+| `HEALTHCHECK` on `/health` | Compose and orchestrators know when the API is ready |
+| AWS Lambda Web Adapter extension | The same image runs on Lambda behind API Gateway ([ADR-001](docs/architecture.md#adr-001--serverless-lambda-over-containers-ecs-fargate)); it is inactive outside Lambda |
+| Pre-compiled bytecode | Faster cold starts on Lambda |
+| Migrations in a separate one-off job | Several replicas or Lambdas never race to migrate, and startup stays fast |
+
+`data/` is mounted read-only for the historical migration; it is not baked into the image.
+To build the image alone: `make image`.
 
 ## Architecture
 

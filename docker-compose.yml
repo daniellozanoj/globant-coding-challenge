@@ -1,5 +1,16 @@
 name: globant-challenge
 
+# `docker compose up` starts only the database (local development with `make run`).
+# The `app` profile adds the containerized API: `docker compose --profile app up`.
+
+x-app-environment: &app-environment
+  DB_HOST: db
+  DB_PORT: 5432
+  DB_NAME: ${DB_NAME:-globant}
+  DB_USER: ${DB_USER:-postgres}
+  DB_PASSWORD: ${DB_PASSWORD:-postgres}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
 services:
   db:
     image: postgres:16-alpine
@@ -17,6 +28,35 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # One-off job: applies the migrations, then exits. The API waits for it to succeed.
+  migrate:
+    profiles: ["app"]
+    build: .
+    image: globant-challenge-api:local
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    profiles: ["app"]
+    build: .
+    image: globant-challenge-api:local
+    container_name: globant-api
+    environment:
+      <<: *app-environment
+      LOCAL_DATA_DIR: /app/data
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:
