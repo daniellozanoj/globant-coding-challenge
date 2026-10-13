@@ -1,4 +1,4 @@
-.PHONY: install lint format test test-unit test-integration coverage run up down logs psql migrate revision image stack stack-down tf-fmt tf-validate tf-lint
+.PHONY: install lint format test test-unit test-integration coverage run up down logs psql migrate revision image stack stack-down tf-fmt tf-validate tf-lint tf-test
 
 install: ## Install runtime and dev dependencies
 	uv sync
@@ -65,6 +65,10 @@ tf-validate: ## Check formatting and validate the Terraform configuration
 	$(TERRAFORM) fmt -check -diff -recursive
 	$(TERRAFORM) init -backend=false -input=false
 	$(TERRAFORM) validate
+
+tf-test: ## Plan-time tests of the architecture with a mocked AWS provider
+	$(TERRAFORM) init -backend=false -input=false
+	$(TERRAFORM) test
 
 tf-lint: ## Lint the Terraform code with tflint and the AWS ruleset
 	$(TFLINT) --init

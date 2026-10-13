@@ -76,3 +76,16 @@ jobs:
           tags: globant-challenge-api:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  terraform:
+    name: terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Same pinned Docker images as `make tf-validate` and `make tf-lint`; no AWS credentials.
+      - name: terraform fmt + validate
+        run: make tf-validate
+      - name: terraform test (plan with a mocked AWS provider)
+        run: make tf-test
+      - name: tflint
+        run: make tf-lint
